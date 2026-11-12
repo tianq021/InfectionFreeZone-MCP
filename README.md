@@ -465,6 +465,7 @@ node client.mjs --steam coop check   --session <sid> --squad 835
 | `scavenge_unavailable` | 目标不可搜/已搜/远征中/不可达（`CanGoToStructure`） |
 | `squad_unavailable` | 小队忙/在车上；显式 `replace_orders` 或换队 |
 | `result_unknown` | 用**同一 request_id** 重试 |
+| `order_not_found` | 移动回执不存在或已超出最近记录，重新读取小队实际状态 |
 
 ---
 

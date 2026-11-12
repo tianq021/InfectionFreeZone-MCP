@@ -21,6 +21,7 @@ namespace IfzMcp;
 public sealed partial class Plugin
 {
     private readonly Dictionary<Guid, WorldCommand> worldCommands = new();
+    private readonly Queue<Guid> finishedWorldCommands = new();
 
     private void RequirePausedWorld()
     {
@@ -41,9 +42,6 @@ public sealed partial class Plugin
                 throw new BridgeException("result_unknown", "Read game state before attempting another write.");
             return previous.Result;
         }
-        if (worldCommands.Count >= 256)
-            throw new BridgeException("order_limit", "The session has reached its world command history limit.");
-
         RequirePausedWorld();
         var command = new WorldCommand(method, input);
         worldCommands.Add(id, command);
@@ -67,6 +65,15 @@ public sealed partial class Plugin
         {
             worldCommands.Remove(id);
             throw;
+        }
+        finally
+        {
+            if (worldCommands.ContainsKey(id))
+            {
+                finishedWorldCommands.Enqueue(id);
+                if (finishedWorldCommands.Count > RecentOrderLimit)
+                    worldCommands.Remove(finishedWorldCommands.Dequeue());
+            }
         }
     }
 

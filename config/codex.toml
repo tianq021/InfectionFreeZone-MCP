@@ -1,7 +1,7 @@
 # 示例：根据本机修改 Node 和仓库的绝对路径。
 [mcp_servers.infection_free_zone]
 command = 'C:\nodejs\node.exe'
-args = ['C:\path\to\InfectionFreeZone-MCP\server.mjs', '--steam']
+args = ['C:\path\to\InfectionFreeZone-MCP\server.mjs', '--steam', '--read-only']
 startup_timeout_sec = 10
 tool_timeout_sec = 15
 

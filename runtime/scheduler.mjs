@@ -8,10 +8,14 @@ const userMessage = z.strictObject({
   text: z.string().trim().min(1).max(4000),
   interrupt: z.boolean().default(false),
 });
-const danger = new Set(["enemy_approach", "squad_low_hp", "squad_threat"]);
-const ordinary = new Set(["order_completed", "cargo_full", "low_stock", "nightfall", "mission_updated"]);
+const danger = new Set(["enemy_approach", "squad_low_hp", "squad_threat", "action_verify_required", "bridge_offline"]);
+const ordinary = new Set(["order_completed", "order_changed", "cargo_full", "low_stock", "nightfall", "mission_updated",
+  "squad_stuck", "bridge_restored", "bridge_error", "game_not_ready", "session_changed"]);
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code });
 const retryDelays = [500, 1500];
+const messageHistoryMs = 30 * 60 * 1000;
+const messageHistoryLimit = 20000;
+const offlineEvents = new Set(["action_finished", "action_verify_required", "bridge_offline", "bridge_error", "game_not_ready"]);
 
 export class Scheduler extends EventEmitter {
   constructor({ stateService, dsh, gameSessionId, getAssignment, dangerMs = 300, ordinaryMs = 1500 }) {
@@ -26,6 +30,7 @@ export class Scheduler extends EventEmitter {
     this.events = new Map();
     this.queue = [];
     this.messages = new Map();
+    this.completedMessages = new Map();
     this.retryTimers = new Map();
     this.connected = false;
     this.onGameEvent = (event) => this.onEvent(event);
@@ -59,8 +64,8 @@ export class Scheduler extends EventEmitter {
     const result = event.type === "action_finished";
     if (!critical && !result && !ordinary.has(event.type)) return;
     const sessionId = event.data?.sessionId ?? this.stateService.state?.sessionId;
-    if (!sessionId || (this.gameSessionId && sessionId !== this.gameSessionId)) return;
-    if (result) this.emit("stream", { type: "action_finished", ...event.data });
+    if (!sessionId || (this.gameSessionId && sessionId !== this.gameSessionId && event.type !== "session_changed")) return;
+    if (result || event.type === "action_verify_required") this.emit("stream", { type: "action_finished", ...event.data });
     const key = event.dedupeKey ?? `${event.type}:${event.cursor}`;
     this.events.set(key, { type: event.type, severity: event.severity, data: event.data, sessionId,
       priority: critical ? 1 : result ? 2 : 3 });
@@ -80,8 +85,8 @@ export class Scheduler extends EventEmitter {
     const sessionId = this.stateService.state?.sessionId;
     const gameOnline = this.stateService.ready && this.stateService.online;
     const events = [...this.events.values()].filter((event) =>
-      event.sessionId === sessionId && (gameOnline || event.type === "action_finished"))
-      .sort((a, b) => a.priority - b.priority).slice(0, 12);
+      event.sessionId === sessionId && (gameOnline || offlineEvents.has(event.type)))
+      .sort((a, b) => a.priority - b.priority);
     this.events.clear();
     if (!events.length) return;
     const priority = events[0].priority;
@@ -89,7 +94,16 @@ export class Scheduler extends EventEmitter {
       JSON.stringify(events.map(({ type, severity, data }) => ({ type, severity, data })));
     if (this.queue.length + this.retryTimers.size < 64)
       this.enqueue({ requestId: randomUUID(), text, mode: priority === 1 ? "steer" : "queue", priority, sessionId, attempts: 0,
-        allowOffline: events.every(({ type }) => type === "action_finished") });
+        allowOffline: events.every(({ type }) => offlineEvents.has(type)) });
+  }
+
+  pruneMessages() {
+    const cutoff = Date.now() - messageHistoryMs;
+    for (const [id, completedAt] of this.completedMessages) {
+      if (completedAt >= cutoff && this.completedMessages.size <= messageHistoryLimit) break;
+      this.completedMessages.delete(id);
+      this.messages.delete(id);
+    }
   }
 
   sendUserMessage(input) {
@@ -97,18 +111,20 @@ export class Scheduler extends EventEmitter {
     if (!parsed.success) throw fail(400, "invalid_message", parsed.error.issues[0].message);
     if (this.abort.signal.aborted) throw fail(503, "scheduler_stopped", "The scheduler is stopping.");
     const value = parsed.data;
+    this.pruneMessages();
     const previous = this.messages.get(value.requestId);
     if (previous) {
       if (previous.text !== value.text || previous.interrupt !== value.interrupt)
         throw fail(409, "request_conflict", "Use a new requestId for a different user message.");
       if (!previous.failed) return previous.promise;
     }
-    if ((!previous && this.messages.size >= 256) || this.queue.filter(({ priority }) => priority === 0).length >= 32)
-      throw fail(429, "message_limit", "The user message queue or history is full.");
+    if (this.messages.size - this.completedMessages.size >= 32)
+      throw fail(429, "message_limit", "Too many user messages are awaiting delivery.");
     const job = previous ?? { ...value, priority: 0, mode: value.interrupt ? "queue" : "steer" };
     job.attempts = 0;
     job.failed = false;
     job.promise = new Promise((resolve, reject) => Object.assign(job, { resolve, reject }));
+    this.completedMessages.delete(value.requestId);
     this.messages.set(value.requestId, job);
     this.enqueue(job);
     return job.promise;
@@ -150,6 +166,7 @@ export class Scheduler extends EventEmitter {
     try {
       await this.dsh.prompt(job, signal);
       this.lastWakeError = null;
+      if (job.resolve) this.completedMessages.set(job.requestId, Date.now());
       job.resolve?.({ accepted: true, requestId: job.requestId, claimed: Boolean(job.claimed), interruptError: job.interruptError });
     } catch (error) {
       this.lastWakeError = { code: error.code ?? "dsh_delivery_failed", at: Date.now() };
@@ -162,6 +179,7 @@ export class Scheduler extends EventEmitter {
         this.retryTimers.set(timer, job);
       } else {
         job.failed = true;
+        if (job.reject) this.completedMessages.set(job.requestId, Date.now());
         job.reject?.(fail(502, "dsh_delivery_unconfirmed", "DSH did not confirm delivery. Retry with the same requestId."));
       }
     }

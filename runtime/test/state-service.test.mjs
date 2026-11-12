@@ -66,6 +66,26 @@ test("差分只包含变化记录和变化字段", async () => {
   service.stop();
 });
 
+test("岗位变化进入差分，且不会唤醒只订阅小队的读者", async () => {
+  const { bridge, service } = setup();
+  bridge.world.worksites = [{ building_id: "site", workers: 1 }];
+  await service.pollOnce();
+  if (service.mapCache.pending) await service.mapCache.pending;
+  await service.pollOnce();
+  const since = service.version;
+  const squads = service.waitForChange({ since, categories: ["squads"], timeoutMs: 500 });
+  const worksites = service.waitForChange({ since, categories: ["worksites"], timeoutMs: 500 });
+  bridge.world.worksites[0].workers = 2;
+  await service.pollOnce({ forceSlow: true });
+  const worksiteChange = await worksites;
+  assert.deepEqual(worksiteChange.delta.worksites.updated, [{ id: "site", changes: [{ path: "workers", value: 2 }] }]);
+  assert.equal(service.getCurrent({ since, categories: ["squads"] }).changed, false);
+  bridge.world.squads[1].position.x++;
+  await service.pollOnce();
+  assert.ok((await squads).delta.squads.updated.length);
+  service.stop();
+});
+
 test("语义事件：敌情分级逼近 + 去重", async () => {
   const { bridge, service } = setup();
   await service.pollOnce();

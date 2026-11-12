@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -13,6 +13,8 @@ import { StateService } from "../state-service.mjs";
 import { createHub } from "../hub.mjs";
 import { Scheduler } from "../scheduler.mjs";
 import { FakeBridge } from "./fake-bridge.mjs";
+
+const token = randomBytes(32).toString("hex");
 
 async function until(read, predicate, timeoutMs = 4000) {
   const deadline = Date.now() + timeoutMs;
@@ -35,6 +37,10 @@ class ActionBridge extends FakeBridge {
 
   async call(method, args) {
     if (["status", "get_state", "get_world_data"].includes(method)) return super.call(method, args);
+    if (method === "get_building_info") {
+      const building = this.world.buildings.find(({ id }) => id === args.building_id);
+      return { ok: Boolean(building), ...building };
+    }
     this.writes.push({ method, args });
     switch (method) {
       case "acquire_control": return { ok: true, lease: randomUUID() };
@@ -55,32 +61,32 @@ class ActionBridge extends FakeBridge {
   }
 }
 
-async function setupExecutor(t, execute) {
+async function setupExecutor(t, execute, watchMs) {
   const sessionId = randomUUID();
   const bridge = new ActionBridge({ sessionId });
   bridge.world.squads.find(({ id }) => id === "835").active_order = null;
   const service = new StateService({ pipe: bridge });
   await service.pollOnce();
   const executor = new ExecService({ pipe: bridge, stateService: service, sessionId,
-    playerSquadId: "834", squadIds: ["835", "836"], execute });
+    playerSquadId: "834", squadIds: ["835", "836"], execute, watchMs });
   t.after(async () => { await executor.stop(); service.stop(); });
   return { sessionId, bridge, service, executor };
 }
 
 test("异步 MCP 提交立即返回，复用原生请求 ID，确认到达后发布完成事件", async (t) => {
   const { sessionId, bridge, service, executor } = await setupExecutor(t);
-  const hub = createHub({ stateService: service, executor, port: 0 });
+  const hub = createHub({ stateService: service, executor, port: 0, token });
   const port = await hub.listen();
   t.after(() => hub.close());
   const client = new Client({ name: "async-test", version: "1.0.0" });
   t.after(() => client.close());
   await client.connect(new StdioClientTransport({
     command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
-    env: { IFZ_RUNTIME_PORT: String(port) },
+    env: { IFZ_RUNTIME_PORT: String(port), IFZ_RUNTIME_TOKEN: token },
   }));
   const health = await client.callTool({ name: "runtime_health", arguments: {} });
   assert.deepEqual(health.structuredContent.assignment, {
-    sessionId, playerSquadId: "834", squadIds: ["835", "836"], ready: true,
+    sessionId, playerSquadId: "834", squadIds: ["835", "836"], pendingVerification: [], ready: true,
   });
   const input = action(sessionId);
   const submit = await client.callTool({ name: "action_submit", arguments: input });
@@ -194,10 +200,10 @@ test("浮窗消息越过等待中的游戏通知，独立接收读入回执、�
   };
   const scheduler = new Scheduler({ stateService: state, dsh, gameSessionId: "game", ordinaryMs: 0 });
   scheduler.start();
-  const hub = createHub({ stateService: state, scheduler, port: 0 });
+  const hub = createHub({ stateService: state, scheduler, port: 0, token });
   const port = await hub.listen();
   const client = spawn(process.execPath, [fileURLToPath(new URL("../chat-client.mjs", import.meta.url)), String(port)],
-    { stdio: ["pipe", "pipe", "inherit"] });
+    { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, IFZ_RUNTIME_TOKEN: token } });
   const closed = once(client, "close");
   const frames = [];
   const lines = createInterface({ input: client.stdout });
@@ -248,7 +254,7 @@ test("浮窗失焦时订单排队，恢复游戏焦点后自动提交", async (t
 
 test("取消排队任务与未知回执都不会导致重复下单", async (t) => {
   let calls = 0;
-  const { sessionId, executor } = await setupExecutor(t, async (_call, { onSubmit }) => {
+  const { sessionId, executor, bridge } = await setupExecutor(t, async (_call, { onSubmit }) => {
     calls++;
     onSubmit();
     return { errors: [{ code: "pipe_timeout", message: "Lost order reply" }] };
@@ -259,8 +265,118 @@ test("取消排队任务与未知回执都不会导致重复下单", async (t) =
   const lost = action(sessionId);
   executor.submit(lost);
   await until(() => executor.get(lost.requestId), ({ state }) => state === "unknown");
-  assert.equal(executor.submit(lost).state, "unknown");
+  assert.equal(executor.submit(lost).held, true);
+  assert.throws(() => executor.submit(action(sessionId)), { code: "action_busy" });
+  assert.equal(executor.assignment().pendingVerification[0].taskId, lost.requestId);
   assert.equal(calls, 1);
+  const squad = bridge.world.squads.find(({ id }) => id === "835");
+  squad.active_order = "MoveOrder";
+  await assert.rejects(executor.resolve(lost.requestId), { code: "squad_busy" });
+  squad.active_order = null;
+  assert.equal((await executor.resolve(lost.requestId)).held, false);
+  assert.equal(executor.submit(lost).finishedAt > 0, true);
+});
+
+test("长期运行可完成 5000 条动作和 2000 条消息，并回放最近的请求", async (t) => {
+  let submissions = 0;
+  const { sessionId, service, executor } = await setupExecutor(t, async () => {
+    submissions++;
+    return { ok: true, receipt: { ok: true } };
+  });
+  const first = action(sessionId);
+  for (let i = 0; i < 5000; i++) {
+    const done = once(service, "event");
+    executor.submit(i === 0 ? first : action(sessionId));
+    const [event] = await done;
+    assert.equal(event.data.state, "succeeded");
+  }
+  assert.equal(executor.tasks.size, 0);
+  assert.equal(executor.submit(first).state, "succeeded");
+  assert.equal(submissions, 5000);
+  let deliveries = 0;
+  const scheduler = new Scheduler({ stateService: service, dsh: { prompt: async () => { deliveries++; } } });
+  t.after(() => scheduler.stop());
+  const message = { requestId: randomUUID(), text: "第一条" };
+  for (let i = 0; i < 2000; i++) {
+    await scheduler.sendUserMessage(i === 0 ? message : { requestId: randomUUID(), text: String(i) });
+  }
+  assert.equal((await scheduler.sendUserMessage(message)).accepted, true);
+  assert.equal(deliveries, 2000);
+});
+
+test("移动超时后继续核对原生回执，确认到达后释放小队", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t, undefined, 15);
+  const input = action(sessionId);
+  executor.submit(input);
+  const pending = await until(() => executor.get(input.requestId), ({ state }) => state === "unknown");
+  assert.equal(pending.held, true);
+  assert.throws(() => executor.submit(action(sessionId)), { code: "action_busy" });
+  bridge.orders.set(input.requestId, { order_id: input.requestId, state: "arrived", terminal: true });
+  await service.pollOnce();
+  const done = await until(() => executor.get(input.requestId), ({ state }) => state === "succeeded");
+  assert.equal(done.held, false);
+  assert.equal(executor.assignment().pendingVerification.length, 0);
+  assert.equal(bridge.writes.filter(({ method }) => method === "move_squad").length, 1);
+});
+
+test("搜刮、攻击和回仓以目标状态或卸货变化确认完成", async (t) => {
+  let receipt;
+  const { sessionId, bridge, service, executor } = await setupExecutor(t, async (_call, options) => {
+    await options.validate(bridge.getState(), bridge.world.squads[1]);
+    options.onSubmit();
+    return { ok: true, receipt: { state: "accepted", ...receipt } };
+  });
+  const building = bridge.world.buildings[1];
+  const group = bridge.world.groups.find(({ id }) => id === "g1");
+  const squad = bridge.world.squads[1];
+  const stockroom = bridge.world.stockrooms[0];
+  const cases = [
+    { command: "scavenge_building", params: { building_id: building.id },
+      receipt: { order: "MoveToBuildingOrder" }, change: () => { building.scavenged = true; },
+      evidence: { buildingId: building.id, scavenged: true } },
+    { command: "attack_group", params: { group_id: group.id },
+      receipt: { order: "AttackGroupOrder" }, change: () => { group.member_count--; },
+      evidence: { groupId: group.id, before: 8, remaining: 7 } },
+    { command: "return_to_stockroom", params: { stockroom_id: stockroom.id },
+      receipt: { order: "MoveToBuildingOrder", stockroom_id: stockroom.id, mounted: false },
+      change: () => { squad.cargo = {}; squad.position = stockroom.position; },
+      evidence: { stockroomId: stockroom.id, distance: 0, cargoBefore: 3, cargo: 0 } },
+  ];
+  squad.cargo = { res_cans: 3 };
+  for (const entry of cases) {
+    receipt = entry.receipt;
+    const input = action(sessionId, { command: entry.command, params: entry.params });
+    executor.submit(input);
+    await until(() => executor.get(input.requestId), ({ state }) => state === "watching");
+    entry.change();
+    await service.pollOnce();
+    const done = await until(() => executor.get(input.requestId), ({ state }) => state === "succeeded");
+    assert.deepEqual(done.evidence, entry.evidence);
+  }
+});
+
+test("本地写接口要求令牌并限制突发请求", async (t) => {
+  const stateService = { health: () => ({ ready: true }) };
+  const executor = { submit: (input) => input, assignment: () => ({ ready: true }) };
+  const hub = createHub({ stateService, executor, port: 0, token });
+  const port = await hub.listen();
+  t.after(() => hub.close());
+  const base = `http://127.0.0.1:${port}`;
+  const send = (headers = {}) => fetch(base + "/actions", {
+    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}",
+  });
+  const anonymous = await send();
+  assert.equal(anonymous.status, 401);
+  await anonymous.arrayBuffer();
+  const headers = { "x-ifz-token": token };
+  for (let i = 0; i < 21; i++) {
+    const response = await send(headers);
+    assert.equal(response.status, i < 20 ? 202 : 429);
+    await response.arrayBuffer();
+  }
+  const health = await fetch(base + "/health");
+  assert.equal(health.status, 200);
+  assert.ok(!(await health.text()).includes(token));
 });
 
 test("DSH 危险唤醒合并，用户消息优先，重试复用请求 ID，助手片段可经 SSE 读到", async (t) => {
@@ -288,10 +404,10 @@ test("DSH 危险唤醒合并，用户消息优先，重试复用请求 ID，助�
   const scheduler = new Scheduler({ stateService: state, dsh, gameSessionId: "game", dangerMs: 15, ordinaryMs: 40 });
   scheduler.start();
   t.after(() => scheduler.stop());
-  const hub = createHub({ stateService: state, scheduler, port: 0 });
+  const hub = createHub({ stateService: state, scheduler, port: 0, token });
   const port = await hub.listen();
   t.after(() => hub.close());
-  const response = await fetch(`http://127.0.0.1:${port}/stream`);
+  const response = await fetch(`http://127.0.0.1:${port}/stream`, { headers: { "x-ifz-token": token } });
   const reader = response.body.getReader();
   t.after(() => reader.cancel());
   const decode = (chunk) => Buffer.from(chunk.value).toString();

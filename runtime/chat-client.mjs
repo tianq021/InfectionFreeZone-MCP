@@ -2,6 +2,7 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
+import { runtimeHeaders } from "./token.mjs";
 
 const port = Number(process.argv[2] ?? 8790);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid runtime chat port.");
@@ -31,7 +32,7 @@ async function follow() {
   const { signal } = stop;
   while (!signal.aborted) {
     try {
-      const response = await fetch(`${base}/stream`, { signal, redirect: "error" });
+      const response = await fetch(`${base}/stream`, { signal, headers: runtimeHeaders(), redirect: "error" });
       if (!response.ok) {
         await response.body?.cancel();
         throw new Error(`Runtime stream HTTP ${response.status}`);
@@ -55,7 +56,7 @@ async function follow() {
 async function send({ requestId, text, interrupt }) {
   try {
     const response = await fetch(`${base}/messages`, {
-      method: "POST", headers: { "content-type": "application/json" }, redirect: "error",
+      method: "POST", headers: runtimeHeaders({ "content-type": "application/json" }), redirect: "error",
       signal: AbortSignal.any([stop.signal, AbortSignal.timeout(22000)]),
       body: JSON.stringify({ requestId, text, interrupt }),
     });

@@ -44,6 +44,7 @@
 | 2026-11-12 | 0.2.2 | 版本收口 0.2.2：插件 36 桥接方法 / MCP 74 工具；新增地形栅格、建筑资源图标、搜刮进度、远征地块、全图车辆、任务详情与行动计划、11 个作弊工具、文档配图；README 重写为详细版 | `plugin/*.cs`、`server.mjs`、`tools-extra*.mjs`、`README.md`、`docs/img/*.png`、`handover/README.md`、`经验-无感染区AI协作.md`、`renew/README.md`、`renew/0.1.txt` |
 
 | 2026-11-12 | 0.2.2 | 发布精选源码快照；补齐可运行的工具自检命令，更新只读模式测试与公开文档 | `package.json`、`scripts/check-tools.mjs`、`runtime/test/async-runtime.test.mjs`、`README.md`、`docs/i18n/*.md`、`handover/README.md`、`runtime/README.md`、`config/`、`renew/` |
+| 2026-11-12 | 0.2.2 | 修复长局历史限制和未知订单占用，加入本地写入认证、地图距离排序、岗位差分和分类等待 | `runtime/`、`plugin/Plugin.cs`、`plugin/UnitControl.cs`、`plugin/BuildingInfo.cs`、`plugin/Expedition.cs`、`config/codex.toml`、`README.md` |
 
 ## 待办
 

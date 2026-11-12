@@ -92,14 +92,16 @@ public sealed partial class Plugin
                 scavenge = new { progress01 = progress, time_left = timeLeft, remaining_crates = remainingCrates },
                 resources
             }, distance));
-            if (rows.Count >= limit) break;
         }
+        var tiles = rows.OrderBy(entry => entry.distance).Take(limit).Select(entry => entry.row).ToList();
         return new
         {
-            count = rows.Count,
+            count = tiles.Count,
+            matched_total = rows.Count,
+            truncated = rows.Count > limit,
             total_loaded = grid.AllExpeditionTiles.Count,
             scavenged_fraction = grid.GetScavengedTilesFraction(),
-            tiles = rows.OrderBy(entry => entry.distance).Select(entry => entry.row).ToList()
+            tiles
         };
     }
 
@@ -112,7 +114,7 @@ public sealed partial class Plugin
         if (limit is < 1 or > 1000)
             throw new BridgeException("invalid_limit", "limit must be between 1 and 1000.");
         var origin = HqController.MainHeadquarter != null ? HqController.MainHeadquarter.Position : Vector3.zero;
-        var rows = new List<(object row, float distance)>();
+        var rows = new List<(object row, float distance, bool discovered)>();
         foreach (var vehicle in controller.Vehicles)
         {
             if (vehicle == null) continue;
@@ -136,14 +138,16 @@ public sealed partial class Plugin
                 trunk_load_ratio = trunk.Capacity > 0 ? (float)trunk.GetCratesCount() / trunk.Capacity : 0f,
                 cargo = trunk.Resources.Where(item => item.Value > 0f)
                     .ToDictionary(item => item.Key.ToString(), item => item.Value)
-            }, distance));
-            if (rows.Count >= limit) break;
+            }, distance, discovered));
         }
+        var nearest = rows.OrderBy(entry => entry.distance).Take(limit).ToList();
         return new
         {
-            count = rows.Count,
-            undiscovered = rows.Count(entry => !((bool)entry.row.GetType().GetProperty("discovered")!.GetValue(entry.row)!)),
-            vehicles = rows.OrderBy(entry => entry.distance).Select(entry => entry.row).ToList()
+            count = nearest.Count,
+            matched_total = rows.Count,
+            truncated = rows.Count > limit,
+            undiscovered = nearest.Count(entry => !entry.discovered),
+            vehicles = nearest.Select(entry => entry.row).ToList()
         };
     }
 }

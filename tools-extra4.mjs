@@ -60,7 +60,7 @@ export function registerTools4({ registerLocal, request, readOnly = false }) {
         }
         summary.push({
           poi: type,
-          count: reply.count,
+          count: reply.matched_total ?? reply.count,
           nearest: (reply.results ?? []).map((row) => ({
             building_id: row.building_id,
             type: row.type,

@@ -1,6 +1,6 @@
 // Local HTTP API for the AI runtime: snapshot/delta reads, long-poll waits, event cursors.
-// Bind to 127.0.0.1 only; no authentication by design (local-only integration surface).
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 
 const numberParam = (url, name) => {
   const raw = url.searchParams.get(name);
@@ -55,9 +55,13 @@ function stream(response, scheduler) {
   write({ type: "status", ...scheduler.health() });
 }
 
-export function createHub({ stateService, executor, scheduler, host = "127.0.0.1", port = 8790, logger = console } = {}) {
+export function createHub({ stateService, executor, scheduler, host = "127.0.0.1", port = 8790,
+  token, requireToken = false, logger = console } = {}) {
   if (!stateService) throw new Error("createHub needs a stateService.");
   if (host !== "127.0.0.1") throw new Error("The runtime HTTP API is local to 127.0.0.1.");
+  if ((executor || scheduler || requireToken) && !token) throw new Error("The runtime HTTP API needs a token.");
+  const expected = token && Buffer.from(token);
+  const writes = new Map();
   const server = http.createServer(async (request, response) => {
     try {
       const authority = `${host}:${server.address().port}`;
@@ -66,9 +70,30 @@ export function createHub({ stateService, executor, scheduler, host = "127.0.0.1
         return send(response, 403, { ok: false, code: "local_origin_required" });
       const url = new URL(request.url ?? "/", origin);
       const actionId = /^\/actions\/([0-9a-f-]{36})$/i.exec(url.pathname)?.[1];
+      const resolveId = /^\/actions\/([0-9a-f-]{36})\/resolve$/i.exec(url.pathname)?.[1];
+      const writeRoute = (request.method === "POST" && (url.pathname === "/actions" || url.pathname === "/messages" || resolveId)) ||
+        (request.method === "DELETE" && actionId);
+      if (expected && (writeRoute || requireToken || url.pathname === "/stream")) {
+        const provided = Buffer.from(request.headers["x-ifz-token"] ?? "");
+        if (provided.length !== expected.length || !timingSafeEqual(provided, expected))
+          return send(response, 401, { ok: false, code: "unauthorized" });
+      }
+      if (writeRoute) {
+        const lane = url.pathname === "/messages" ? "messages" : "actions";
+        const now = Date.now();
+        const recent = (writes.get(lane) ?? []).filter((at) => now - at < 10000);
+        if (recent.length >= (lane === "messages" ? 10 : 20))
+          return send(response, 429, { ok: false, code: "rate_limited" });
+        recent.push(now);
+        writes.set(lane, recent);
+      }
       if (request.method === "POST" && url.pathname === "/actions") {
         if (!executor) return send(response, 503, { ok: false, code: "executor_disabled" });
         return send(response, 202, { ok: true, task: executor.submit(await readJson(request)) });
+      }
+      if (request.method === "POST" && resolveId) {
+        if (!executor) return send(response, 503, { ok: false, code: "executor_disabled" });
+        return send(response, 200, { ok: true, task: await executor.resolve(resolveId) });
       }
       if (actionId && ["GET", "DELETE"].includes(request.method)) {
         if (!executor) return send(response, 503, { ok: false, code: "executor_disabled" });

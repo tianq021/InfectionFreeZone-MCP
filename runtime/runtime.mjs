@@ -6,6 +6,7 @@ import { createHub } from "./hub.mjs";
 import { ExecService } from "./exec-service.mjs";
 import { Scheduler } from "./scheduler.mjs";
 import { DshClient } from "./dsh-client.mjs";
+import { runtimeToken } from "./token.mjs";
 import { z } from "zod";
 
 const args = process.argv.slice(2);
@@ -45,7 +46,9 @@ const scheduler = dshSessionId ? new Scheduler({
   dsh: new DshClient({ home: dshHome, sessionId: dshSessionId, url: option("--dsh-url") }),
   getAssignment: executor ? () => executor.assignment() : undefined,
 }) : null;
-const hub = createHub({ stateService: service, executor, scheduler, port });
+const requireToken = hasFlag("--require-token");
+const token = executor || scheduler || requireToken ? runtimeToken({ create: true }) : undefined;
+const hub = createHub({ stateService: service, executor, scheduler, port, token, requireToken });
 
 service.on("event", (event) => {
   if (event.type === "bridge_offline" || event.type === "bridge_restored" || event.type === "session_changed") {

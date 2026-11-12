@@ -46,10 +46,13 @@
 | `POST /actions` | 入队后返回 HTTP 202 和任务。请求含 `requestId`、`sessionId`、`squadId`、`command`、`params`、`notice` |
 | `GET /actions/<id>` | 读取任务状态、游戏回执和错误 |
 | `DELETE /actions/<id>` | 取消排队任务，或请求中止提交前的准备 |
+| `POST /actions/<id>/resolve` | 玩家核对游戏后释放待确认的任务。Runtime 会再次检查小队当前订单与队列 |
 | `POST /messages` | 将含 `requestId` 和 `text` 的用户消息优先投递给 DSH。设置 `interrupt: true` 时先中断当前回合。DSH 确认接收后返回 |
 | `GET /stream` | SSE 推送 DSH 助手片段、消息读入回执、回合边界、连接状态和订单结果 |
 
-同一个动作或用户消息重试时沿用原 `requestId`。队列和查询历史保存在 runtime 进程内。执行器每次只持有一条写任务，并在提交后继续观察结果。原生移动回执确认到达后标记 `succeeded`。其他订单结束但缺少完成证据时标记 `unknown`，可继续查询相关小队、车辆或目标。
+同一个动作或用户消息重试时沿用原 `requestId`。每类已结束记录在进程内最多保留 30 分钟或 20,000 条。重启 Runtime 或记录过期后，先核对游戏或 DSH 的实际状态，再决定是否提交。执行器串行提交原生订单，并在提交后继续观察。缺少完成证据时，任务显示为 `unknown`、`held: true`，同时保留小队和搜刮目标的占用，直到查到结果或玩家核对后释放。
+
+写接口和浮窗事件流使用 `x-ifz-token`。启用动作或 DSH 时，Runtime 默认在 `%LOCALAPPDATA%\ifz-runtime\token` 生成令牌，同一账户下的 Runtime MCP 和浮窗会自动读取。可用 `IFZ_RUNTIME_TOKEN_FILE` 指定受当前用户保护的路径，或给各进程设置相同的 `IFZ_RUNTIME_TOKEN`。使用 `--require-token` 可同时保护查询接口。动作与消息接口分别限制为每 10 秒 20 和 10 次。
 
 MCP 工具对应 `runtime_health`、`world_snapshot`、`world_wait`、`events_poll`、`events_wait`、`action_submit`、`action_status` 和 `action_cancel`。地图和单位的直接查询仍可使用现有游戏 MCP。
 
@@ -76,7 +79,7 @@ $dshSession = '替换为已在 DSH 打开的会话 UUID'
 node runtime/runtime.mjs --steam --game-session $gameSession --dsh-session $dshSession --dsh-home $env:DSH_HOME
 ```
 
-同时启用执行和唤醒时，把两组参数放在同一条启动命令里。用 [DSH 配置示例](../config/dsh.patch.yml) 或 [Codex 配置示例](../config/codex.toml) 注册 `ifz_runtime`。DSH 配置示例给原生 MCP 加 `--read-only`，保留按区域查询建筑、单位和路径的能力。下单统一走 runtime，玩家保留队以及分工以外的队伍会被拒绝。若 runtime 使用其他端口，在该 MCP 进程的环境中设置 `IFZ_RUNTIME_PORT`。
+同时启用执行和唤醒时，把两组参数放在同一条启动命令里。用 [DSH 配置示例](../config/dsh.patch.yml) 或 [Codex 配置示例](../config/codex.toml) 注册 `ifz_runtime`。两份示例均以 `--read-only` 注册原生 MCP，协作下单由 Runtime 执行。若 runtime 使用其他端口，在该 MCP 进程的环境中设置 `IFZ_RUNTIME_PORT`。
 
 ## DSH 自主带队
 

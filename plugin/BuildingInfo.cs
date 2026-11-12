@@ -194,12 +194,12 @@ public sealed partial class Plugin
         {
             if (building == null) continue;
             if (onlyScavengeable && (!building.CanScavenge() || building.IsScavenged() || building.IsStockroom())) continue;
-            var flags = PoiFlagsOf(building);
-            var matched = flags.Where(flag => wanted.Contains(flag)).ToList();
-            if (matched.Count == 0) continue;
             var center = building.CenterPosition;
             var distance = origin.HasValue ? PlanarDistance(origin.Value, center) : 0f;
             if (origin.HasValue && distance > radius) continue;
+            var flags = PoiFlagsOf(building);
+            var matched = flags.Where(flag => wanted.Contains(flag)).ToList();
+            if (matched.Count == 0) continue;
             rows.Add((new
             {
                 building_id = building.Id,
@@ -212,13 +212,15 @@ public sealed partial class Plugin
                 can_scavenge = building.CanScavenge(),
                 scavenged = building.IsScavenged()
             }, distance));
-            if (rows.Count >= limit) break;
         }
+        var results = rows.OrderBy(entry => entry.distance).Take(limit).Select(entry => entry.row).ToList();
         return new
         {
-            count = rows.Count,
+            count = results.Count,
+            matched_total = rows.Count,
+            truncated = rows.Count > limit,
             poi = names,
-            results = rows.OrderBy(entry => entry.distance).Select(entry => entry.row).ToList()
+            results
         };
     }
 }

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { actionInput } from "./exec-service.mjs";
+import { runtimeHeaders } from "./token.mjs";
 
 const port = Number(process.env.IFZ_RUNTIME_PORT ?? 8790);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid IFZ_RUNTIME_PORT.");
@@ -14,7 +15,8 @@ function tool(name, description, inputSchema, request) {
     try {
       const [path, options] = request(args);
       const response = await fetch(base + path, {
-        ...options, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]),
+        ...options, headers: runtimeHeaders(options?.headers), redirect: "error",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]),
       });
       value = await response.json();
     } catch (error) {

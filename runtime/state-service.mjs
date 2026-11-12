@@ -338,7 +338,9 @@ export class StateService extends EventEmitter {
       const delta = this.collectDelta(Number(since));
       if (delta) {
         if (!pickedCategories) return { ok: true, version: this.version, delta, changed: true };
-        return { ok: true, version: this.version, delta: this.filterDelta(delta, pickedCategories), changed: true };
+        const filtered = this.filterDelta(delta, pickedCategories);
+        return { ok: true, version: this.version, delta: filtered, changed: Object.keys(filtered).length > 2,
+          at: this.state.at, sessionId: this.state.sessionId };
       }
     }
     const state = pickedCategories ? Object.fromEntries(pickedCategories.map((field) => [field, this.state[field]])) : this.state;
@@ -354,7 +356,7 @@ export class StateService extends EventEmitter {
     const filtered = { fromVersion: delta.fromVersion, toVersion: delta.toVersion };
     for (const field of fields) {
       const category = reverse.get(field) ?? field;
-      if (delta[category]) filtered[category] = delta[category];
+      if (delta[field]) filtered[category] = delta[field];
     }
     if (delta.header) filtered.header = delta.header;
     return filtered;
@@ -389,8 +391,10 @@ export class StateService extends EventEmitter {
   }
 
   waitForChange({ since = null, timeoutMs = 5000, categories = null, signal } = {}) {
-    if (since != null && this.version > since)
-      return Promise.resolve({ ...this.getCurrent({ since, categories }), changed: true });
+    if (since != null && this.version > since) {
+      const current = this.getCurrent({ since, categories });
+      if (current.changed) return Promise.resolve(current);
+    }
     const result = () => ({ ok: true, changed: false, version: this.version });
     const pending = this.addWaiter(this.waiters, { since, categories }, timeoutMs, signal, result);
     this.emit("wait", { kind: "state", waiters: this.waiters.length });
@@ -431,7 +435,9 @@ export class StateService extends EventEmitter {
     this.waiters = [];
     for (const waiter of waiters) {
       if (waiter.since != null && this.version <= waiter.since) { this.waiters.push(waiter); continue; }
-      waiter.resolve({ ...this.getCurrent({ since: waiter.since, categories: waiter.categories }), changed: true });
+      const current = this.getCurrent({ since: waiter.since, categories: waiter.categories });
+      if (!current.changed) { this.waiters.push(waiter); continue; }
+      waiter.resolve(current);
     }
     this.resolveEventWaiters();
   }

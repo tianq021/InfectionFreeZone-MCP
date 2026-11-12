@@ -26,7 +26,10 @@ public sealed partial class Plugin : BaseUnityPlugin
     private static SquadsController squads;
     private static PauseController pauses;
     private static TimeSpeedSetter speed;
+    private const int RecentOrderLimit = 8192;
     private readonly Dictionary<Guid, Move> moves = new();
+    private readonly LinkedList<Move> activeMoves = new();
+    private readonly Queue<Guid> finishedMoves = new();
     private PipeBridge bridge;
     private object headquarters;
     private SquadsController sessionSquads;
@@ -144,7 +147,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             {
                 if (pauses.IsPopupPaused || pauses.IsUIPaused) FinishStep("ui_pause");
                 else if (TimeController.IsPaused) FinishStep("game_paused");
-                else if (step.UntilOrder.HasValue && moves[step.UntilOrder.Value].Terminal) FinishStep("order_ended");
+                else if (step.UntilOrder is Guid until && (!moves.TryGetValue(until, out var order) || order.Terminal))
+                    FinishStep(order == null ? "order_missing" : "order_ended");
                 else if (Now >= step.Deadline) FinishStep("time_limit");
             }
             bridge.Pump(Dispatch);
@@ -180,7 +184,10 @@ public sealed partial class Plugin : BaseUnityPlugin
         sessionSquads = null;
         sessionId = null;
         moves.Clear();
+        activeMoves.Clear();
+        finishedMoves.Clear();
         worldCommands.Clear();
+        finishedWorldCommands.Clear();
         lastStep = null;
     }
 
@@ -344,8 +351,6 @@ public sealed partial class Plugin : BaseUnityPlugin
                 throw new BridgeException("request_conflict", "The request_id was already used with different arguments.");
             return previous.Result();
         }
-        if (moves.Count >= 256)
-            throw new BridgeException("order_limit", "This test session has reached its order history limit.");
         if (step != null || !pauses.IsOnlyGameplayPaused)
             throw new BridgeException("pause_required", "Apply gameplay pause and close any popup before issuing a move.");
         var squad = FindSquad(squadId);
@@ -362,6 +367,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         var order = new MoveOrder(target, donUsePenalty: !squad.IsUsingVehicle);
         var move = new Move(requestId, squad, squadId, order, target, x, z, replace);
         moves.Add(requestId, move);
+        activeMoves.AddLast(move);
         try
         {
             squad.OrdersHandlers.GiveOrder(order, clearOrders: replace);
@@ -378,15 +384,28 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void UpdateMoves()
     {
-        foreach (var move in moves.Values)
+        var node = activeMoves.First;
+        while (node != null)
         {
-            if (move.Terminal) continue;
-            if (move.Squad == null || move.Squad.IsDestroying)
-                move.State = "squad_lost";
-            else if (Contains(move))
-                move.State = move.Squad.IsMoving ? "moving" : "accepted";
-            else
-                move.State = PlanarDistance(move.Squad.Position, move.Target) <= 4 ? "arrived" : "ended_short_of_target";
+            var move = node.Value;
+            var next = node.Next;
+            if (!move.Terminal)
+            {
+                if (move.Squad == null || move.Squad.IsDestroying)
+                    move.State = "squad_lost";
+                else if (Contains(move))
+                    move.State = move.Squad.IsMoving ? "moving" : "accepted";
+                else
+                    move.State = PlanarDistance(move.Squad.Position, move.Target) <= 4 ? "arrived" : "ended_short_of_target";
+            }
+            if (move.Terminal)
+            {
+                activeMoves.Remove(node);
+                finishedMoves.Enqueue(move.Id);
+                if (finishedMoves.Count > RecentOrderLimit)
+                    moves.Remove(finishedMoves.Dequeue());
+            }
+            node = next;
         }
     }
 

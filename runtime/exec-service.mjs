@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { executeCoopOrder } from "../coop.mjs";
+import { executeCoopOrder, readState, readWorld } from "../coop.mjs";
 
 const id = z.string().trim().min(1).max(64);
 const coordinate = z.number().finite();
@@ -25,13 +25,17 @@ export const actionInput = {
 const actionSchema = z.strictObject(actionInput);
 const transportErrors = new Set(["bridge_offline", "bridge_closed", "bridge_protocol", "pipe_timeout",
   "transport_error", "game_error", "result_unknown", "EPERM", "ECONNRESET", "EPIPE"]);
-const terminal = new Set(["succeeded", "failed", "unknown", "canceled"]);
+const watchDurations = { move_squad: 90000, scavenge_building: 600000, attack_group: 300000,
+  return_to_stockroom: 240000, take_vehicle: 180000 };
 const queueTimeoutMs = 30000;
+const historyMs = 30 * 60 * 1000;
+const historyLimit = 20000;
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code });
 const summary = (task) => structuredClone(task.view);
+const totalCargo = (cargo) => Object.values(cargo ?? {}).reduce((sum, amount) => sum + amount, 0);
 
 export class ExecService {
-  constructor({ pipe, stateService, sessionId, playerSquadId, squadIds, execute = executeCoopOrder, watchMs = 120000 }) {
+  constructor({ pipe, stateService, sessionId, playerSquadId, squadIds, execute = executeCoopOrder, watchMs }) {
     this.call = async (method, args) => {
       const reply = await pipe.call(method, args);
       if (!reply || reply.ok === false) throw fail(502, reply?.code ?? "bridge_protocol", reply?.message ?? method);
@@ -44,6 +48,7 @@ export class ExecService {
     this.execute = execute;
     this.watchMs = watchMs;
     this.tasks = new Map();
+    this.finished = new Map();
     this.queue = [];
     this.active = null;
     this.stopped = false;
@@ -60,6 +65,8 @@ export class ExecService {
     const currentIds = new Set(state?.squads.map(({ id }) => String(id)));
     return {
       sessionId: this.sessionId, playerSquadId: this.playerSquadId, squadIds,
+      pendingVerification: [...this.tasks.values()].filter(({ view }) => view.state === "unknown")
+        .map(({ view }) => ({ taskId: view.taskId, squadId: view.squadId, code: view.error?.code })),
       ready: !this.stopped && ready && online && state?.sessionId === this.sessionId &&
         currentIds.has(this.playerSquadId) && squadIds.every((id) => currentIds.has(id)),
     };
@@ -72,7 +79,7 @@ export class ExecService {
     const commandParams = params[value.command].safeParse(value.params ?? {});
     if (!commandParams.success) throw fail(400, "invalid_action_params", commandParams.error.issues[0].message);
     const action = { ...value, params: commandParams.data, priority: value.priority ?? 0 };
-    const previous = this.tasks.get(action.requestId);
+    const previous = this.lookup(action.requestId);
     if (previous) {
       if (!isDeepStrictEqual(previous.input, action)) throw fail(409, "request_conflict", "Use a new requestId for a different action.");
       return summary(previous);
@@ -84,12 +91,11 @@ export class ExecService {
       throw fail(403, "squad_not_assigned", "The squad is outside the configured AI assignment.");
     if (!this.assignment().ready)
       throw fail(409, "squad_changed", "The squad roster no longer matches the assignment.");
-    if (this.tasks.size >= 512 || this.queue.length >= 32) throw fail(429, "action_limit", "The executor queue or history is full.");
+    if (this.tasks.size >= 64 || this.queue.length >= 32) throw fail(429, "action_limit", "The executor has too many active tasks.");
 
     const building = action.params.building_id;
     for (const task of this.tasks.values()) {
-      if (!terminal.has(task.view.state) &&
-          (task.input.squadId === action.squadId || (building && task.input.params.building_id === building)))
+      if (task.input.squadId === action.squadId || (building && task.input.params.building_id === building))
         throw fail(409, "action_busy", "An active task already uses this squad or building.");
     }
     const task = {
@@ -108,14 +114,23 @@ export class ExecService {
     return summary(task);
   }
 
+  lookup(id) {
+    const cutoff = Date.now() - historyMs;
+    for (const [taskId, task] of this.finished) {
+      if (task.view.finishedAt >= cutoff && this.finished.size <= historyLimit) break;
+      this.finished.delete(taskId);
+    }
+    return this.tasks.get(id) ?? this.finished.get(id);
+  }
+
   get(id) {
-    const task = this.tasks.get(id);
+    const task = this.lookup(id);
     if (!task) throw fail(404, "action_not_found", "Unknown task ID.");
     return summary(task);
   }
 
   cancel(id) {
-    const task = this.tasks.get(id);
+    const task = this.lookup(id);
     if (!task) throw fail(404, "action_not_found", "Unknown task ID.");
     if (task.view.state === "queued") {
       this.queue = this.queue.filter((entry) => entry !== task);
@@ -123,21 +138,50 @@ export class ExecService {
     } else if (task.view.state === "preparing") {
       task.view.cancelRequested = true;
       task.abort.abort();
-    } else if (!terminal.has(task.view.state)) {
+    } else if (!task.view.finishedAt) {
       throw fail(409, "order_already_submitted", "The game may already be executing this order.");
     }
     return summary(task);
   }
 
+  async resolve(id) {
+    const task = this.lookup(id);
+    if (!task) throw fail(404, "action_not_found", "Unknown task ID.");
+    if (task.view.finishedAt) return summary(task);
+    if (task.view.state !== "unknown")
+      throw fail(409, "action_not_held", "Only an unresolved action can be released.");
+    const current = await readState(this.call, task.input.sessionId);
+    const squads = await readWorld(this.call, current, "squads");
+    const squad = squads.find(({ id }) => String(id) === task.input.squadId);
+    if (squad?.active_order || squad?.queued_orders?.length)
+      throw fail(409, "squad_busy", "Wait until the squad has no active or queued game orders.");
+    this.finish(task, "unknown", { code: "operator_released", message: "The operator released the held action." });
+    return summary(task);
+  }
+
   finish(task, state, error) {
-    if (terminal.has(task.view.state)) return;
+    if (task.view.finishedAt) return;
     clearTimeout(task.timer);
-    Object.assign(task.view, { state, error, finishedAt: Date.now() });
+    Object.assign(task.view, { state, error, held: false, finishedAt: Date.now() });
+    this.tasks.delete(task.input.requestId);
+    this.finished.set(task.input.requestId, { input: task.input, view: task.view });
+    this.lookup(task.input.requestId);
     this.stateService.pushEvent({
       type: "action_finished", severity: state === "unknown" ? "warn" : "info",
       at: task.view.finishedAt,
       data: { taskId: task.view.taskId, sessionId: task.input.sessionId, squadId: task.input.squadId,
         command: task.input.command, state, code: error?.code },
+    });
+  }
+
+  hold(task, error) {
+    if (task.view.finishedAt || task.view.state === "unknown") return;
+    clearTimeout(task.timer);
+    Object.assign(task.view, { state: "unknown", error, held: true });
+    this.stateService.pushEvent({
+      type: "action_verify_required", severity: "warn", at: Date.now(),
+      data: { taskId: task.view.taskId, sessionId: task.input.sessionId, squadId: task.input.squadId,
+        command: task.input.command, state: "unknown", code: error?.code },
     });
   }
 
@@ -176,10 +220,21 @@ export class ExecService {
             ? { vehicle_id: current.vehicle_id } : {}),
           ...(action.command === "equip_squad_member" || action.command === "refill_squad_member_ammo" ? { source: "cargo" } : {}),
         }),
-        validate: (_state, current) => {
+        validate: async (paused, current) => {
           if (action.command === "attack_group" &&
               current.members?.some((member) => member.hp < 60 || !(member.ammo > 0)))
             throw fail(409, "squad_needs_supplies", "Withdraw or replenish the squad before attacking.");
+          if (action.command === "attack_group") {
+            const groups = await readWorld(this.call, paused, action.params.virtual ? "virtual_groups" : "groups");
+            task.targetCount = groups.find(({ id }) => String(id) === action.params.group_id)?.member_count;
+          }
+          if (action.command === "return_to_stockroom") {
+            const vehicle = current.vehicle_id && (await readWorld(this.call, paused, "vehicles"))
+              .find(({ id }) => String(id) === current.vehicle_id);
+            task.cargoBefore = current.vehicle_id
+              ? (vehicle?.trunk ? totalCargo(vehicle.trunk.cargo) : undefined)
+              : totalCargo(current.cargo);
+          }
         },
       });
       task.view.receipt = result.receipt;
@@ -187,24 +242,25 @@ export class ExecService {
       const error = result.errors?.[0];
       if (!result.receipt) {
         const submitted = task.view.state === "submitting";
-        this.finish(task, submitted && (!error || transportErrors.has(error.code)) ? "unknown" :
-          task.abort.signal.aborted && !submitted ? "canceled" : "failed", error);
+        if (submitted && (!error || transportErrors.has(error.code))) this.hold(task, error);
+        else this.finish(task, task.abort.signal.aborted && !submitted ? "canceled" : "failed", error);
       } else if (result.receipt.state === "rejected") {
         this.finish(task, "failed", { code: "order_rejected", message: "The game rejected the order." });
       } else if (result.receipt.state === undefined) {
-        this.finish(task, result.ok ? "succeeded" : "unknown", error);
+        this.finish(task, "succeeded");
       } else {
         task.view.state = "watching";
         task.seenOrder = result.after?.squad?.order === result.receipt.order && Boolean(result.receipt.order);
-        task.timer = setTimeout(() => this.finish(task, "unknown", {
+        task.timer = setTimeout(() => this.hold(task, {
           code: "watch_timeout", message: "The order outcome could not be verified in time.",
-        }), this.watchMs);
+        }), this.watchMs ?? watchDurations[action.command] ?? 120000);
         task.timer.unref();
         this.inspect();
       }
     } catch (error) {
-      this.finish(task, task.abort.signal.aborted ? "canceled" : task.view.state === "submitting" ? "unknown" : "failed",
-        { code: error.code ?? "action_error", message: error.message });
+      const detail = { code: error.code ?? "action_error", message: error.message };
+      if (task.view.state === "submitting") this.hold(task, detail);
+      else this.finish(task, task.abort.signal.aborted ? "canceled" : "failed", detail);
     }
   }
 
@@ -215,7 +271,7 @@ export class ExecService {
       const state = this.stateService.state;
       if (!state || !this.stateService.ready || !this.stateService.online) return;
       for (const task of this.tasks.values()) {
-        if (task.view.state !== "watching") continue;
+        if (task.view.state !== "watching" && task.view.state !== "unknown") continue;
         const { input, view } = task;
         if (input.sessionId !== state.sessionId) {
           this.finish(task, "unknown", { code: "session_changed", message: "The settlement changed after submission." });
@@ -224,7 +280,7 @@ export class ExecService {
         if (input.command === "move_squad") {
           try {
             const order = await this.call("get_order", { session_id: input.sessionId, order_id: input.requestId });
-            if (view.state !== "watching") continue;
+            if (view.finishedAt) continue;
             view.order = order;
             if (order.terminal) this.finish(task, order.state === "arrived" ? "succeeded" : "failed",
               order.state === "arrived" ? undefined : { code: order.state, message: "The move ended before arrival." });
@@ -236,14 +292,53 @@ export class ExecService {
         const squad = state.squads.find(({ id }) => String(id) === input.squadId);
         if (input.command === "take_vehicle" && squad?.vehicle_id === input.params.vehicle_id) {
           this.finish(task, "succeeded");
-        } else if (squad?.active_order === view.receipt.order && view.receipt.order) {
+        } else if (view.receipt?.order && (squad?.active_order === view.receipt.order ||
+          squad?.queued_orders?.includes(view.receipt.order))) {
           task.seenOrder = true;
-        } else if (task.seenOrder || !squad) {
-          this.finish(task, "unknown", { code: "order_ended_unverified", message: "The order ended. Read the squad and target to verify the outcome." });
+        } else if (!squad) {
+          this.finish(task, "failed", { code: "squad_lost", message: "The assigned squad is no longer present." });
+        } else if (view.receipt) {
+          const evidence = await this.verify(task, state, squad);
+          if (evidence && !view.finishedAt && !this.stopped) {
+            view.evidence = evidence;
+            this.finish(task, "succeeded");
+          }
         }
       }
     } finally {
       this.inspecting = false;
+    }
+  }
+
+  async verify(task, state, squad) {
+    const { input, view } = task;
+    if (input.command === "scavenge_building") {
+      try {
+        const building = await this.call("get_building_info", {
+          session_id: input.sessionId, building_id: input.params.building_id,
+        });
+        if (building.scavenged === true && this.stateService.state?.sessionId === input.sessionId)
+          return { buildingId: input.params.building_id, scavenged: true };
+      } catch {
+        // Recheck later if the bridge or target is unavailable.
+      }
+    }
+    if (input.command === "attack_group") {
+      const groups = input.params.virtual ? state.virtualGroups : state.groups;
+      const target = groups?.find(({ id }) => String(id) === input.params.group_id);
+      if (target?.visible && target.member_count < task.targetCount)
+        return { groupId: input.params.group_id, before: task.targetCount, remaining: target.member_count };
+    }
+    if (input.command === "return_to_stockroom") {
+      const room = state.stockrooms?.find(({ id }) => String(id) === view.receipt.stockroom_id);
+      const vehicle = view.receipt.mounted && state.vehicles?.find(({ id }) => String(id) === view.receipt.vehicle_id);
+      const position = view.receipt.mounted ? vehicle?.position : squad.position;
+      if (!position || !room?.position) return;
+      const distance = Math.hypot(position.x - room.position.x, position.z - room.position.z);
+      const cargo = totalCargo(view.receipt.mounted ? vehicle.trunk?.cargo : squad.cargo);
+      const unloaded = task.cargoBefore > 0 && cargo < task.cargoBefore && distance <= 40;
+      const arrivedEmpty = task.cargoBefore === 0 && task.seenOrder && distance <= 12;
+      if (unloaded || arrivedEmpty) return { stockroomId: room.id, distance, cargoBefore: task.cargoBefore, cargo };
     }
   }
 
@@ -253,7 +348,7 @@ export class ExecService {
     for (const task of this.queue.splice(0)) this.finish(task, "canceled");
     for (const task of this.tasks.values()) if (task.view.state === "preparing") task.abort.abort();
     await this.active;
-    for (const task of this.tasks.values()) if (task.view.state === "watching") this.finish(task, "unknown",
+    for (const task of this.tasks.values()) if (task.view.state === "watching") this.hold(task,
       { code: "executor_stopped", message: "The game may still be executing the order." });
   }
 }
