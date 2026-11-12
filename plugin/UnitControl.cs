@@ -43,7 +43,9 @@ public sealed partial class Plugin
                 throw new BridgeException("result_unknown", "Read game state before attempting another write.");
             return previous.Result;
         }
-        if (method != "choose_dialogue_option" && method != "cancel_squad_order") RequirePausedWorld();
+        if (method != "choose_dialogue_option" && method != "cancel_squad_order" && method != "update_work_task" &&
+            method != "queue_construction" && method != "set_facility_production" && method != "set_facility_defense_weapon")
+            RequirePausedWorld();
         var command = new WorldCommand(method, input);
         worldCommands.Add(id, command);
         try
@@ -53,6 +55,10 @@ public sealed partial class Plugin
                 "move_npc_group" => MoveNpcGroup(args),
                 "attack_group" => AttackGroup(args, command),
                 "set_building_workers" => SetBuildingWorkers(args),
+                "update_work_task" => UpdateWorkTask(args),
+                "queue_construction" => QueueConstruction(args),
+                "set_facility_production" => SetFacilityProduction(args),
+                "set_facility_defense_weapon" => SetFacilityDefenseWeapon(args),
                 "equip_squad_member" => EquipMember(args),
                 "refill_squad_member_ammo" => RefillMemberAmmo(args),
                 "scavenge_building" => ScavengeBuilding(args, command),
@@ -60,6 +66,7 @@ public sealed partial class Plugin
                 "take_vehicle" => TakeVehicle(args, command),
                 "cancel_squad_order" => CancelSquadOrder(args),
                 "choose_dialogue_option" => ChooseRadioOption(args),
+                "cheat_apply" => ApplyGroupedCheat(args),
                 _ => throw new BridgeException("unknown_method", "Unknown world command.")
             };
             return command.Result;

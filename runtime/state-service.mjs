@@ -24,7 +24,7 @@ const FIELD_BY_CATEGORY = {
 const CATEGORY_BY_FIELD = Object.fromEntries(Object.entries(FIELD_BY_CATEGORY).map(([category, field]) => [field, category]));
 
 const PAGE_LIMIT = 100;
-const ERROR_CODES_OFFLINE = new Set(["bridge_offline", "bridge_closed", "pipe_timeout", "ECONNREFUSED", "ENOENT"]);
+const ERROR_CODES_OFFLINE = new Set(["bridge_offline", "ECONNREFUSED", "ENOENT"]);
 
 const round = (value) => Math.round(value * 10) / 10;
 
@@ -82,7 +82,7 @@ export class StateService extends EventEmitter {
     if (this.running) return this;
     this.running = true;
     this.startedAt = this.now();
-    if (immediate) await this.pollOnce().catch((error) => this.recordError(error));
+    if (immediate) await this.pollOnce().catch(() => {});
     this.scheduleNext();
     return this;
   }
@@ -98,7 +98,7 @@ export class StateService extends EventEmitter {
     if (!this.running) return;
     const delay = this.online ? this.config.fastIntervalMs : this.config.offlineRetryMs;
     this.timer = setTimeout(async () => {
-      try { await this.pollOnce(); } catch (error) { this.recordError(error); }
+      await this.pollOnce().catch(() => {});
       this.scheduleNext();
     }, Math.max(20, delay));
     if (typeof this.timer.unref === "function") this.timer.unref();
@@ -110,12 +110,17 @@ export class StateService extends EventEmitter {
     const started = this.now();
     this.pollSeq += 1;
     this.stats.pollSeq = this.pollSeq;
+    let stateRead = false;
     try {
       const stateReply = await this.bridgeCall("get_state");
-      if (stateReply?.ok === false || !stateReply?.ready) {
-        const reason = stateReply?.code ?? "not_ready";
-        this.online = true;
-        this.handleNotReady(reason, stateReply);
+      if (!stateReply || stateReply.ok === false)
+        throw Object.assign(new Error(stateReply?.message ?? "The bridge did not return game state."),
+          { code: stateReply?.code ?? "bridge_protocol" });
+      stateRead = true;
+      if (!stateReply.ready) {
+        this.markOnline();
+        this.lastError = null;
+        this.handleNotReady(stateReply.code ?? "not_ready", stateReply);
         return this.state;
       }
       this.ready = true;
@@ -196,8 +201,17 @@ export class StateService extends EventEmitter {
       if (slowDue) this.refreshMap(sessionId, stateReply.headquarters);
       return this.state;
     } catch (error) {
-      this.recordError(error);
-      throw error;
+      let failure = error;
+      if (stateRead && ERROR_CODES_OFFLINE.has(error.code)) {
+        const probe = await this.bridgeCall("status").catch(() => null);
+        if (probe?.ok) {
+          this.online = true;
+          failure = Object.assign(new Error("The bridge answered status but a state read could not connect."),
+            { code: "bridge_busy" });
+        }
+      }
+      this.recordError(failure);
+      throw failure;
     }
   }
 
@@ -212,18 +226,20 @@ export class StateService extends EventEmitter {
 
   recordError(error) {
     this.stats.pollErrors += 1;
+    const previousCode = this.lastError?.code;
     this.lastError = { code: error.code ?? "error", message: String(error.message ?? error), at: this.now() };
+    this.ready = false;
     const offline = ERROR_CODES_OFFLINE.has(error.code);
     if (offline) {
-      if (this.online !== false || this.state == null) {
-        this.online = false;
+      const newOutage = this.online || !this.wasOffline;
+      this.online = false;
+      if (newOutage) {
         this.wasOffline = true;
         this.stats.offlineCount += 1;
         this.pushEvent({ type: "bridge_offline", severity: "critical", dedupeKey: `offline:${this.stats.offlineCount}`, data: { code: this.lastError.code, message: this.lastError.message } });
         this.resolveWaiters();
       }
-      this.online = false;
-    } else {
+    } else if (previousCode !== this.lastError.code) {
       this.pushEvent({ type: "bridge_error", severity: "warn", dedupeKey: `bridge_error:${this.lastError.code}`, data: this.lastError });
     }
   }
@@ -491,7 +507,8 @@ export class StateService extends EventEmitter {
       mapError: this.mapCache.error,
       startedAt: this.startedAt,
       uptimeMs: this.startedAt ? this.now() - this.startedAt : 0,
-      stats: { ...this.stats, pipeCalls: this.pipe.calls ?? null, pipeFailures: this.pipe.failures ?? null, waiters: this.waiters.length, eventWaiters: this.eventWaiters.length },
+      stats: { ...this.stats, pipeCalls: this.pipe.calls ?? null, pipeFailures: this.pipe.failures ?? null,
+        pipeRetries: this.pipe.retries ?? null, waiters: this.waiters.length, eventWaiters: this.eventWaiters.length },
       config: {
         fastIntervalMs: this.config.fastIntervalMs,
         mediumIntervalMs: this.config.mediumIntervalMs,

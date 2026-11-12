@@ -6,8 +6,7 @@
 //   node weather.mjs --save-root "<存档根目录>"
 //   node weather.mjs --all-forecast 打印全部 38 天预报
 //
-// 说明：游戏桥接没有天气接口，天气与月相只存在于存档 data.json。
-// 数据来自最近一次自动存档，存在最长约一个游戏日的滞后。
+// 此脚本读取磁盘存档。运行中的天气和气温由 MCP 的 get_current_weather 查询。
 
 import fs from "node:fs";
 import path from "node:path";

@@ -13,9 +13,15 @@ import { StateService } from "../state-service.mjs";
 import { createHub } from "../hub.mjs";
 import { Scheduler } from "../scheduler.mjs";
 import { registerEnemyTools } from "../../tools-extra3.mjs";
+import { compass } from "../../tools-extra.mjs";
 import { FakeBridge } from "./fake-bridge.mjs";
 
 const token = randomBytes(32).toString("hex");
+
+test("地图方位沿世界坐标 X 向东、Z 向北", () => {
+  const offsets = [[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]];
+  assert.deepEqual(offsets.map(([dx, dz]) => compass(dx, dz)), ["北", "东北", "东", "东南", "南", "西南", "西", "西北"]);
+});
 
 async function until(read, predicate, timeoutMs = 4000) {
   const deadline = Date.now() + timeoutMs;
@@ -37,6 +43,8 @@ class ActionBridge extends FakeBridge {
   orders = new Map();
   stops = new Map();
   loseNextStopReply = false;
+  losePauseReply = false;
+  playerPausesFirst = false;
 
   async call(method, args) {
     if (["status", "get_state", "get_world_data"].includes(method)) return super.call(method, args);
@@ -49,10 +57,17 @@ class ActionBridge extends FakeBridge {
       case "acquire_control": return { ok: true, lease: randomUUID() };
       case "release_control":
       case "hud_message": return { ok: true };
-      case "pause":
+      case "pause": {
+        Object.assign(this.baseState.time, { paused: true, gameplay_pause: true });
+        if (this.playerPausesFirst) return { ok: false, code: "game_blocked" };
+        this.baseState.pause_request_id = args.pause_request_id;
+        if (this.losePauseReply)
+          throw Object.assign(new Error("pause reply lost"), { code: "pipe_timeout" });
+        return this.getState();
+      }
       case "advance": {
-        const paused = method === "pause";
-        Object.assign(this.baseState.time, { paused, gameplay_pause: paused });
+        Object.assign(this.baseState.time, { paused: false, gameplay_pause: false });
+        this.baseState.pause_request_id = null;
         return this.getState();
       }
       case "move_squad":
@@ -89,6 +104,30 @@ async function setupExecutor(t, execute, watchMs) {
   return { sessionId, bridge, service, executor };
 }
 
+test("协作暂停回执丢失后只恢复该请求拥有的暂停", async (t) => {
+  const { sessionId, bridge, executor } = await setupExecutor(t);
+  bridge.losePauseReply = true;
+  const input = action(sessionId);
+  executor.submit(input);
+  const task = await until(() => executor.get(input.requestId), ({ state }) => state === "failed");
+  assert.equal(task.error.code, "pipe_timeout");
+  assert.equal(bridge.baseState.time.paused, false);
+  const pauseId = bridge.writes.find(({ method }) => method === "pause").args.pause_request_id;
+  assert.equal(bridge.writes.find(({ method }) => method === "advance").args.pause_request_id, pauseId);
+  assert.ok(!bridge.writes.some(({ method }) => method === "move_squad"));
+});
+
+test("玩家先手动暂停时协作订单不恢复游戏速度", async (t) => {
+  const { sessionId, bridge, executor } = await setupExecutor(t);
+  bridge.playerPausesFirst = true;
+  const input = action(sessionId);
+  executor.submit(input);
+  const task = await until(() => executor.get(input.requestId), ({ state }) => state === "failed");
+  assert.equal(task.error.code, "game_blocked");
+  assert.equal(bridge.baseState.time.paused, true);
+  assert.ok(!bridge.writes.some(({ method }) => method === "advance" || method === "move_squad"));
+});
+
 test("异步 MCP 提交立即返回，复用原生请求 ID，确认到达后发布完成事件", async (t) => {
   const { sessionId, bridge, service, executor } = await setupExecutor(t);
   const hub = createHub({ stateService: service, executor, port: 0, token });
@@ -97,7 +136,7 @@ test("异步 MCP 提交立即返回，复用原生请求 ID，确认到达后发
   const client = new Client({ name: "async-test", version: "1.0.0" });
   t.after(() => client.close());
   await client.connect(new StdioClientTransport({
-    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
+    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url)), "--enable-actions"],
     env: { IFZ_RUNTIME_PORT: String(port), IFZ_RUNTIME_TOKEN: token },
   }));
   const health = await client.callTool({ name: "runtime_health", arguments: {} });
@@ -177,15 +216,17 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
   const names = new Set(tools.map(({ name }) => name));
   for (const name of [
     "get_map_buildings", "get_navigation_point", "get_order", "get_state",
-    "get_world_data", "status", "get_weather", "observe", "get_mission_plan", "get_active_dialogue",
-    "get_squad_experience", "get_weapon_details", "get_attack_conditions",
+    "get_world_data", "status", "get_weather", "get_current_weather", "get_mood", "observe", "get_mission_plan", "get_active_dialogue",
+    "get_squad_experience", "get_weapon_details", "get_attack_conditions", "get_workforce", "get_fog_of_war",
+    "get_construction_catalog", "preview_construction", "get_construction_order", "get_facilities",
   ]) {
     assert.ok(names.has(name), `Missing read tool: ${name}`);
   }
   for (const name of [
     "acquire_control", "release_control", "pause", "advance", "hud_message",
     "move_squad", "move_npc_group", "attack_group", "scavenge_building",
-    "return_to_stockroom", "take_vehicle", "set_stockpile_amount", "set_building_workers",
+    "return_to_stockroom", "take_vehicle", "set_stockpile_amount", "set_building_workers", "update_work_task", "queue_construction",
+    "set_facility_production", "set_facility_defense_weapon",
     "equip_squad_member", "refill_squad_member_ammo", "export_snapshot", "choose_dialogue_option", "cancel_squad_order",
   ]) {
     assert.ok(!names.has(name), `Unexpected write tool: ${name}`);
@@ -200,6 +241,33 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
   assert.deepEqual(conditions.required, ["session_id", "squad_id", "group_id"]);
 });
 
+test("平民 MCP 可派工和建造，保留敌情与迷雾查询并隐藏小队指令", async (t) => {
+  const direct = new Client({ name: "workforce-test", version: "1.0.0" });
+  t.after(() => direct.close());
+  await direct.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [fileURLToPath(new URL("../../server.mjs", import.meta.url)), "--workforce-only", "--allow-construction", "--enable-cheats"],
+  }));
+  const directNames = new Set((await direct.listTools()).tools.map(({ name }) => name));
+  for (const name of ["get_workforce", "update_work_task", "acquire_control", "release_control", "get_enemy_report", "get_fog_of_war",
+    "get_current_weather", "get_mood",
+    "get_construction_catalog", "preview_construction", "queue_construction", "get_construction_order", "get_facilities",
+    "set_facility_production", "set_facility_defense_weapon"])
+    assert.ok(directNames.has(name), `Missing workforce tool: ${name}`);
+  for (const name of ["move_squad", "attack_group", "cancel_squad_order", "scavenge_building", "equip_squad_member", "set_building_workers"])
+    assert.ok(!directNames.has(name), `Unexpected tool: ${name}`);
+  assert.ok([...directNames].every((name) => !name.startsWith("cheat_")));
+
+  const runtime = new Client({ name: "workforce-runtime-test", version: "1.0.0" });
+  t.after(() => runtime.close());
+  await runtime.connect(new StdioClientTransport({
+    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
+  }));
+  const { tools } = await runtime.listTools();
+  assert.ok(tools.some(({ name }) => name === "world_snapshot"));
+  assert.ok(tools.every(({ name }) => !name.startsWith("action_")));
+});
+
 test("强制终止已提交的订单，回执丢失时复用请求 ID，并发送一次提醒", async (t) => {
   const { sessionId, bridge, service, executor } = await setupExecutor(t);
   const hub = createHub({ stateService: service, executor, port: 0, token });
@@ -208,7 +276,7 @@ test("强制终止已提交的订单，回执丢失时复用请求 ID，并发�
   const client = new Client({ name: "stop-test", version: "1.0.0" });
   t.after(() => client.close());
   await client.connect(new StdioClientTransport({
-    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
+    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url)), "--enable-actions"],
     env: { IFZ_RUNTIME_PORT: String(port), IFZ_RUNTIME_TOKEN: token },
   }));
   const input = action(sessionId);
@@ -379,7 +447,7 @@ test("取消排队任务与未知回执都不会导致重复下单", async (t) =
   const client = new Client({ name: "resolve-test", version: "1.0.0" });
   t.after(() => client.close());
   await client.connect(new StdioClientTransport({
-    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
+    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url)), "--enable-actions"],
     env: { IFZ_RUNTIME_PORT: String(port), IFZ_RUNTIME_TOKEN: token },
   }));
   const resolve = async () => (await client.callTool({

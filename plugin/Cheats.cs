@@ -9,6 +9,7 @@ using Gameplay.GameResources;
 using Gameplay.Units;
 using Gameplay.Units.Enemy;
 using Gameplay.Vehicles;
+using JutsuGamesConfig.Runtime;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using Utilities;
@@ -45,6 +46,8 @@ public sealed partial class Plugin
                 return CheatUnlockExpedition();
             case "cheat_complete_missions":
                 return CheatCompleteMissions();
+            case "cheat_complete_mission":
+                return CheatCompleteMission(args);
             case "cheat_scavenge_all":
                 return CheatScavengeAll();
             case "cheat_set_time":
@@ -56,6 +59,49 @@ public sealed partial class Plugin
             default:
                 throw new BridgeException("unknown_method", "Unknown cheat method.");
         }
+    }
+
+    private object ApplyGroupedCheat(JObject args)
+    {
+        var action = Text(args, "action", 80);
+        var parameters = args["params"] as JObject ??
+            throw new BridgeException("invalid_cheat_params", "Provide a parameters object.");
+        return action switch
+        {
+            "spawn_infected" => CheatSpawnInfected(parameters),
+            "give_weapon" => CheatGiveWeapon(parameters),
+            "add_resources" or "refill_ammo" or "heal_squads" or "spawn_squad" or "reveal_groups" or
+                "unlock_expedition" or "scavenge_all" or "set_time" or "complete_mission" or "complete_missions" =>
+                ExecuteCheat("cheat_" + action, parameters),
+            _ => throw new BridgeException("unknown_cheat", "Choose an action from cheat_catalog.")
+        };
+    }
+
+    private object CheatSpawnInfected(JObject args)
+    {
+        var count = (int?)args["count"] ?? 1;
+        if (count is < 1 or > 12)
+            throw new BridgeException("invalid_count", "count must be between 1 and 12.");
+        var ground = FindGround(new Vector3(Coordinate(args, "x"), 25f, Coordinate(args, "z")));
+        var draft = Configs.GetConfig<GroupsConfig>().GetDraftByName("inf_human");
+        var group = WorldContainer().Resolve<GroupBuilder>().SpawnGroupAt(ground, draft, count);
+        if (group == null)
+            throw new BridgeException("spawn_rejected", "The game refused to create an infected group there.");
+        group.Show();
+        return new { group_id = group.Id.ToString(), type = "inf_human",
+            members = group.Characters.Count(), position = Position(group.Position), visible = group.IsVisible() };
+    }
+
+    private object CheatGiveWeapon(JObject args)
+    {
+        var weapon = Text(args, "weapon_id", 80);
+        if (!Enum.TryParse<ResourceID>(weapon, out var id) || id.ToString() != weapon ||
+            !ResourcesDataContainer.Instance.IsWeapon(id))
+            throw new BridgeException("invalid_weapon", "Use a weapon_id from get_weapon_details.");
+        var quantity = (int?)args["quantity"] ?? 0;
+        if (quantity is < 1 or > 1000)
+            throw new BridgeException("invalid_amount", "Use a whole weapon quantity between 1 and 1000.");
+        return CheatAddResources(new JObject { ["resource_id"] = weapon, ["quantity"] = quantity });
     }
 
     private static object CheatList() => new

@@ -12,6 +12,10 @@ const danger = new Set(["enemy_approach", "squad_low_hp", "squad_threat", "actio
   "dialogue_options_available"]);
 const ordinary = new Set(["order_completed", "order_changed", "cargo_full", "low_stock", "nightfall", "mission_updated",
   "squad_stuck", "bridge_restored", "bridge_error", "game_not_ready", "session_changed"]);
+// 静音模式：只压制玩家侧高频噪音事件（订单变更/货满/任务更新等），
+// 保留 order_completed 等任务完成事件，便于 AI 实时接管下一单。
+const quietGameEvents = process.env.IFZ_QUIET_GAME_EVENTS === "1";
+const quietSuppressed = new Set(["order_changed", "cargo_full", "mission_updated", "nightfall", "low_stock"]);
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code });
 const retryDelays = [500, 1500];
 const messageHistoryMs = 30 * 60 * 1000;
@@ -65,6 +69,7 @@ export class Scheduler extends EventEmitter {
     const critical = danger.has(event.type) && event.severity !== "info";
     const result = event.type === "action_finished";
     if (!critical && !result && !ordinary.has(event.type)) return;
+    if (quietGameEvents && !critical && !result && quietSuppressed.has(event.type)) return;
     const sessionId = event.data?.sessionId ?? this.stateService.state?.sessionId;
     if (!sessionId || (this.gameSessionId && sessionId !== this.gameSessionId && event.type !== "session_changed")) return;
     if (result || event.type === "action_verify_required") this.emit("stream", { type: "action_finished", ...event.data });

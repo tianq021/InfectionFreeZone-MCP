@@ -54,8 +54,8 @@ const token = executor || scheduler || chooseDialogue || requireToken ? runtimeT
 const hub = createHub({ stateService: service, executor, scheduler, chooseDialogue, port, token, requireToken });
 
 service.on("event", (event) => {
-  if (event.type === "bridge_offline" || event.type === "bridge_restored" || event.type === "session_changed") {
-    log("event", { type: event.type, severity: event.severity, cursor: event.cursor });
+  if (["bridge_offline", "bridge_restored", "bridge_error", "session_changed"].includes(event.type)) {
+    log("event", { type: event.type, severity: event.severity, cursor: event.cursor, code: event.data?.code });
   }
 });
 

@@ -84,7 +84,7 @@ $dshSession = '替换为已在 DSH 打开的会话 UUID'
 node runtime/runtime.mjs --steam --game-session $gameSession --dsh-session $dshSession --dsh-home $env:DSH_HOME
 ```
 
-同时启用执行和唤醒时，把两组参数放在同一条启动命令里。用 [DSH 配置示例](../config/dsh.patch.yml) 或 [Codex 配置示例](../config/codex.toml) 注册 `ifz_runtime`。两份示例均以 `--read-only` 注册原生 MCP，协作下单由 Runtime 执行。若 runtime 使用其他端口，在该 MCP 进程的环境中设置 `IFZ_RUNTIME_PORT`。
+用 [DSH 配置示例](../config/dsh.patch.yml) 或 [Codex 配置示例](../config/codex.toml) 注册 MCP。两份示例的原生 MCP 使用 `--workforce-only`，玩家负责小队。使用旧版小队协作流程时，Runtime 进程和 `runtime-mcp.mjs` 都需要显式传入 `--enable-actions`。若 Runtime 使用其他端口，在 MCP 进程的环境中设置 `IFZ_RUNTIME_PORT`。
 
 ## DSH 自主带队
 

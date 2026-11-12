@@ -51,16 +51,18 @@ tool("events_wait", "Wait up to 10 seconds for game or action events after a cur
 tool("get_active_dialogue", "Read the visible radio transcript, currently selectable replies and the game's effect hints. Read again after a choice to see the next conversation.", {}, () => ["/dialogue"]);
 tool("choose_dialogue_option", "Choose one currently visible radio reply. Use session_id, choice_id and option_id from get_active_dialogue and a fresh request_id. Reuse request_id on retry.", dialogueChoiceInput,
   (args) => ["/dialogue/choose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }]);
-tool("action_submit", "Queue an action for an assigned squad and return a task ID immediately. Reuse requestId on retry. In live co-op, yield after submitting: the scheduler wakes the session on completion. Read action_status to inspect a receipt.",
-  actionInput, (args) => ["/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }]);
-tool("action_status", "Read an asynchronous action task and its game receipt.", { taskId }, (args) => [`/actions/${args.taskId}`]);
-tool("action_cancel", "Cancel a queued action or stop it before submission.", { taskId },
-  (args) => [`/actions/${args.taskId}`, { method: "DELETE" }]);
-tool("action_force_stop", "Stop a tracked AI action, including a native order already accepted by the game. Provide the reason for the player's notification. Check stopReceipt for any other orders still in the queue before submitting a retreat.",
-  { taskId, ...stopActionInput }, ({ taskId, reason }) => [`/actions/${taskId}/stop`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }),
-  }]);
-tool("action_resolve", "Release an unresolved action after checking the outcome. The runtime rechecks that the squad has no active or queued native orders and preserves the unknown result.", { taskId },
-  (args) => [`/actions/${args.taskId}/resolve`, { method: "POST" }]);
+if (process.argv.includes("--enable-actions")) {
+  tool("action_submit", "Queue an action for an assigned squad and return a task ID immediately. Reuse requestId on retry. In live co-op, yield after submitting: the scheduler wakes the session on completion. Read action_status to inspect a receipt.",
+    actionInput, (args) => ["/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }]);
+  tool("action_status", "Read an asynchronous action task and its game receipt.", { taskId }, (args) => [`/actions/${args.taskId}`]);
+  tool("action_cancel", "Cancel a queued action or stop it before submission.", { taskId },
+    (args) => [`/actions/${args.taskId}`, { method: "DELETE" }]);
+  tool("action_force_stop", "Stop a tracked AI action, including a native order already accepted by the game. Provide the reason for the player's notification. Check stopReceipt for any other orders still in the queue before submitting a retreat.",
+    { taskId, ...stopActionInput }, ({ taskId, reason }) => [`/actions/${taskId}/stop`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }),
+    }]);
+  tool("action_resolve", "Release an unresolved action after checking the outcome. The runtime rechecks that the squad has no active or queued native orders and preserves the unknown result.", { taskId },
+    (args) => [`/actions/${args.taskId}/resolve`, { method: "POST" }]);
+}
 
 await server.connect(new StdioServerTransport());

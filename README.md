@@ -13,9 +13,9 @@
 
 ---
 
-> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **80 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
+> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **92 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
 >
-> 适用本机 **Steam build 26104777**、Windows x64、Unity Mono。最后更新：2026-11-12。
+> 适用 **Steam build 26104777**、Windows x64、Unity Mono。最后更新：2026-11-13。
 
 ![架构总览](docs/img/architecture.png)
 
@@ -29,7 +29,7 @@
 - [2. 快速开始](#2-快速开始)（含[多语言](#多语言mcp-工具描述)）
 - [3. 构建、安装与升级（v0.2.2）](#3-构建安装与升级v022)
 - [4. 工程结构](#4-工程结构)
-- [5. 工具总览（80 个）](#5-工具总览80-个)
+- [5. 工具总览](#5-工具总览)
 - [6. 复合工具详解](#6-复合工具详解)
 - [7. 写入链路与人机协作](#7-写入链路与人机协作)
 - [8. 作弊/调试工具与使用政策](#8-作弊调试工具与使用政策)
@@ -47,9 +47,9 @@
 | 层 | 组成 | 说明 |
 |---|---|---|
 | 游戏层 | 《无感染区》Steam build `26104777` | 存档位于 `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
-| 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器，提供 **45 个桥接方法** |
+| 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器 |
 | 桥接层 | Windows 命名管道 `\\.\pipe\infection-free-zone-mcp-steam-v1` | 同用户 ACL，单次调用 16–20 ms，整轮 7 类读取约 115 ms |
-| 服务层 | `server.mjs` | MCP stdio 服务，注册 **80 个工具**（45 桥接 + 1 天气 + 34 复合） |
+| 服务层 | `server.mjs` | MCP stdio 服务，默认 92 个工具，DSH 平民协作配置 65 个，纯只读 59 个 |
 | 客户端层 | DSH / Codex / `client.mjs` / 游戏内浮窗 / 只读监视器 | AI 通过 MCP 对话；玩家在游戏里用浮窗插话/打断 |
 
 **核心设计**
@@ -100,7 +100,7 @@ npm run tools:list
 
 ### 多语言（MCP 工具描述）
 
-- `node server.mjs --lang zh-CN|en|ja|ru`，或设置环境变量 `IFZ_MCP_LANG`；MCP 客户端读到的 80 个工具描述会切换语言（默认 `en`）。
+- `node server.mjs --lang zh-CN|en|ja|ru`，或设置环境变量 `IFZ_MCP_LANG`，可切换 MCP 工具描述语言（默认 `en`）。
 - 翻译表在 [i18n.mjs](i18n.mjs)，缺失项自动回退英文；`stderr` 会打印 `[ifz-mcp] language=...` 便于确认。
 - 文档翻译：[English](docs/i18n/README.en.md) · [日本語](docs/i18n/README.ja.md) · [Русский](docs/i18n/README.ru.md)（配英文版架构/流程图为 `docs/i18n/images/`）。
 
@@ -134,7 +134,8 @@ Copy-Item plugin\bin\Release\netstandard2.1\IfzMcp.dll $target -Force
 
 ```powershell
 node client.mjs --steam status          # version 必须为 0.2.2
-npm run tools:list                      # 必须列出 80 个工具
+npm run tools:list                      # 默认 92 个工具
+npm run tools:list -- --steam --workforce-only --allow-construction  # DSH 配置 65 个
 ```
 
 ### 3.4 v0.2.2 新增内容一览
@@ -170,7 +171,7 @@ InfectionFreeZone-MCP/
 │  ├─ Missions.cs               # 任务详情、单任务完成
 │  ├─ Cheats.cs                 # 11 个作弊/调试桥接
 │  └─ Hud.cs                    # 游戏内 HUD 提示
-├─ server.mjs                   # MCP 服务（80 工具注册）
+├─ server.mjs                   # MCP 服务与工具注册
 ├─ tools-extra.mjs              # 复合工具第一批（观察/经济/威胁/天气…）
 ├─ tools-extra2.mjs             # 第二批（地形报告/路线/搜刮计划/日报/岗位…）
 ├─ tools-extra3.mjs             # 第三批（敌人/感染变体/动物/中立/进度/暂停）
@@ -191,20 +192,32 @@ InfectionFreeZone-MCP/
 
 | 脚本 | 作用 |
 |---|---|
-| `npm run tools:list` | MCP 握手和工具列表 |
-| `npm run tools:call` | 调用两个只读工具，检查存档和桥接响应结构 |
+| `npm run tools:list` | MCP 握手并列出工具。可加 `-- --read-only` 检查纯只读配置 |
+| `npm run tools:call` | 检查聚落、无线电、存档和态势，失败时退出码非零。可加 `-- --steam --read-only` 检查 Steam 连接 |
 | `npm test` | 运行 Runtime 测试，无需启动游戏 |
 
 ---
 
-## 5. 工具总览（80 个）
+## 5. 工具总览
 
-### 5.1 桥接·只读（17）
+### 平民派工与建筑
+
+Codex 和 DSH 的示例配置使用 `--workforce-only --allow-construction`。AI 可以派工、建造和管理设施，玩家负责小队。`get_enemy_report` 和 `get_fog_of_war` 提供敌情与迷雾查询。
+
+- `get_workforce` 列出可用人数、分配模式和任务。`update_work_task` 接收刚读到的 `expected_value`。手动模式设置 `assigned_workers`，优先级模式设置 `max_workers` 或 `priority`。
+- `get_construction_catalog` 列出可建造类型、解锁和尺寸限制。`preview_construction` 核对整块地基的水面、坡度、相邻建筑和材料，并返回人员容量、施工与生产工时。
+- `new` 可直接指定最终用途、中心 `x` 和 `z`、长宽高及外墙。完工时自动成为目标建筑。`adapt` 使用 `building_id` 改造现有建筑。取得写租约后通过 `queue_construction` 提交，再用同一 `request_id` 查询 `get_construction_order`。
+- 指定位置可以说「总部中心向东 30 米、向北 20 米」。向东增加 `x`，向北增加 `z`。
+- `get_facilities` 按生产、防御或医疗类型查询设施。`set_facility_production` 可安排配方切换，`set_facility_defense_weapon` 可更换城门和塔的武器。医院提供医生和床位查询，医生人数走派工工具。
+
+### 5.1 桥接·只读
 
 | 工具 | 说明 |
 |---|---|
 | `status` | 桥接版本、场景、会话、租约持有者 |
 | `get_state` | 时间、暂停原因、总部、小队概览、advance 状态 |
+| `get_current_weather` | 当前聚落的天气、气温（°C）、降水、风和月相 |
+| `get_mood` | 居民情绪等级、趋势、起因以及对工人效率和出生率的影响 |
 | `get_order` | 查询某次移动订单的结果 |
 | `get_world_data` | 14 类对象分页读取（见 §5.5） |
 | `get_map_buildings` | 建筑查询：全图/近邻/路线走廊，可只返回可搜刮 |
@@ -491,6 +504,8 @@ node client.mjs --steam coop check   --session <sid> --squad 835
 
 ## 8. 作弊/调试工具与使用政策
 
+启动原生 MCP 时可加 `--enable-cheats`，通过 `cheat_catalog` 查询分类和参数，通过 `cheat_apply` 执行单项操作。纯只读模式可查询目录。
+
 - 11 个 `cheat_*` 全部要求写租约，走游戏原生 `GameConsoleCommandHandler` 与容器接口。
 - **仅限紧急**：关键小队即将全灭、存档卡死、任务无法完成、玩家明确要求；先用非作弊手段。
 - 执行顺序：只读诊断 → 最小干扰命令 → **立刻复查数据**（`observe`/`get_threats`/`get_state`）→ 记录到 `.local/runs/`。
@@ -517,6 +532,7 @@ node client.mjs --steam cheat_add_resources '{"lease":"<lease>","session_id":"<s
 | 数据 | 来源 | 是否需要游戏运行 |
 |---|---|---|
 | 实时状态/订单/单位 | 命名管道 → 插件（Unity 主线程） | 是 |
+| 实时天气、气温、居民情绪 | 游戏 `WeatherController`、`MoodController` | 是 |
 | 天气、月相、38 天预报 | 存档 `data.json` → `WeatherControllerSerialized` | **否** |
 | 进度解锁（232 项） | 存档 `ContentStateController._contentStatesList` | **否** |
 | 存档信息（天数/城市/时间） | 存档 `info.json` | **否** |

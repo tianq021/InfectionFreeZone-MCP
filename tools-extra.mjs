@@ -138,9 +138,9 @@ export function summarizeThreats(groups, { hq = HQ_FALLBACK, squads = [], maxDis
   };
 }
 
-/** 方位描述（z 增大为南，x 增大为东）。 */
+/** 世界坐标的 X 正向朝东，Z 正向朝北。 */
 export function compass(dx, dz) {
-  const angle = (Math.atan2(dx, -dz) * 180) / Math.PI; // 0=北
+  const angle = (Math.atan2(dx, dz) * 180) / Math.PI;
   const normalized = (angle + 360) % 360;
   const labels = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
   return labels[Math.round(normalized / 45) % 8];

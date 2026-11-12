@@ -151,7 +151,9 @@ export async function executeCoopOrder(call, {
   const lease = heldLease ?? (await call("acquire_control", { owner })).lease;
   const control = { lease, session_id: session };
   const errors = [];
-  let pausedByUs = false;
+  const pauseRequestId = randomUUID();
+  let pauseAttempted = false;
+  let legacyPauseConfirmed = false;
   let requestId, receipt, receiptTime, after;
 
   try {
@@ -160,8 +162,10 @@ export async function executeCoopOrder(call, {
     if (noticeLeadMs > 0) await sleep(noticeLeadMs, undefined, { signal });
     timings.notice = milliseconds(announcement);
     requireRunning(await readState(call, session));
-    const paused = await call("pause", control);
-    pausedByUs = paused.time.gameplay_pause;
+    pauseAttempted = true;
+    const paused = await call("pause", { ...control, pause_request_id: pauseRequestId });
+    legacyPauseConfirmed = !Object.hasOwn(paused, "pause_request_id") && paused.time.gameplay_pause;
+    const pausedByUs = legacyPauseConfirmed || paused.pause_request_id === pauseRequestId;
     requireNoRadioChoice(paused);
     requireCondition(paused.session_id === session && pausedByUs && paused.focused &&
       !paused.time.popup_pause && !paused.time.ui_pause, "game_blocked", "游戏状态变了，请重新查看局势。");
@@ -183,12 +187,16 @@ export async function executeCoopOrder(call, {
   } catch (error) {
     errors.push(errorInfo(error));
   } finally {
-    if (pausedByUs) {
+    if (pauseAttempted) {
       try {
         const state = await readState(call, session);
-        if (state.time.gameplay_pause && !state.time.popup_pause && !state.time.ui_pause &&
+        const ownsPause = state.pause_request_id === pauseRequestId;
+        if ((ownsPause || legacyPauseConfirmed) && state.time.gameplay_pause && !state.time.popup_pause && !state.time.ui_pause &&
             !state.radio_paused && !state.dialogue?.choice_id) {
-          const resumed = await call("advance", { ...control, seconds: 1, keep_running: true, allow_background: true });
+          const resumed = await call("advance", {
+            ...control, seconds: 1, keep_running: true, allow_background: true,
+            ...(ownsPause && { pause_request_id: pauseRequestId }),
+          });
           requireCondition(!resumed.time.paused, "resume_blocked", "游戏未恢复 1 倍速。");
         }
       } catch (error) {

@@ -171,6 +171,7 @@ test("桥接掉线与恢复：事件只报一次，恢复后 online", async () =
   bridge.goOffline();
   await assert.rejects(() => service.pollOnce(), /bridge offline/);
   assert.equal(service.health().online, false);
+  assert.equal(service.health().ready, false);
   assert.ok(findEvent(service, "bridge_offline"), "expected bridge_offline");
   // 持续离线不重复上报
   await assert.rejects(() => service.pollOnce());
@@ -179,6 +180,50 @@ test("桥接掉线与恢复：事件只报一次，恢复后 online", async () =
   await service.pollOnce();
   assert.equal(service.health().online, true);
   assert.ok(findEvent(service, "bridge_restored"), "expected bridge_restored");
+  service.stop();
+});
+
+test("游戏尚未启动时重复轮询只记录一次桥接离线", async () => {
+  const { bridge, service } = setup();
+  bridge.goOffline();
+  await service.start();
+  assert.equal(service.health().stats.pollErrors, 1);
+  await assert.rejects(() => service.pollOnce());
+  await assert.rejects(() => service.pollOnce());
+  assert.equal(service.events.filter(({ type }) => type === "bridge_offline").length, 1);
+  bridge.goOnline();
+  const getState = bridge.getState.bind(bridge);
+  bridge.getState = () => ({ ok: true, ready: false, scene: "Main" });
+  await service.pollOnce();
+  assert.equal(service.health().online, true);
+  assert.equal(service.health().ready, false);
+  assert.equal(service.health().lastError, null);
+  bridge.getState = getState;
+  await service.pollOnce();
+  assert.equal(service.health().ready, true);
+  service.stop();
+});
+
+test("桥接仍能响应时，局部读取连接失败记为繁忙", async () => {
+  const { bridge, service } = setup();
+  await service.pollOnce();
+  const call = bridge.call.bind(bridge);
+  bridge.call = async (method, args) => {
+    if (method === "get_world_data" && args.category === "squads")
+      throw Object.assign(new Error("connect failed"), { code: "bridge_offline" });
+    return call(method, args);
+  };
+  await assert.rejects(() => service.pollOnce(), { code: "bridge_busy" });
+  await assert.rejects(() => service.pollOnce(), { code: "bridge_busy" });
+  assert.equal(service.health().online, true);
+  assert.equal(service.health().ready, false);
+  assert.equal(service.health().lastError.code, "bridge_busy");
+  assert.equal(service.events.filter(({ type }) => type === "bridge_error").length, 1);
+  assert.equal(findEvent(service, "bridge_offline"), undefined);
+  bridge.call = call;
+  await service.pollOnce();
+  assert.equal(service.health().ready, true);
+  assert.equal(service.health().lastError, null);
   service.stop();
 });
 

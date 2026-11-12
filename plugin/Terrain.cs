@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using MapOperator.Runtime.Generators.Waters.Height;
 using MapEssentials;
 using Navigation;
 using Newtonsoft.Json.Linq;
@@ -25,6 +26,13 @@ public sealed partial class Plugin
     private const char KindBridge = 'b';
     private const char KindDetached = 'D';
 
+    private static bool HasWaterSurface(Vector3 point) => Map.ElevationManager?.WaterHeightProvider switch
+    {
+        TriangleWaterHeightProvider triangles => triangles.GetWaterHeight(point) > -2f,
+        GridWaterHeightProvider grid => grid.GetWaterHeight(point) > -1f,
+        _ => false
+    };
+
     private object ReadTerrainGrid(JObject args)
     {
         WorldContainer();
@@ -34,9 +42,10 @@ public sealed partial class Plugin
             throw new BridgeException("navigation_not_ready", "The navigation graph is not available yet.");
 
         var step = (float?)args["step"] ?? 50f;
-        if (!float.IsFinite(step) || step is < 5f or > 300f)
-            throw new BridgeException("invalid_step", "step must be between 5 and 300 world units.");
+        if (!float.IsFinite(step) || step is < 1f or > 300f)
+            throw new BridgeException("invalid_step", "step must be between 1 and 300 world units.");
         var includeHeights = (bool?)args["include_heights"] ?? false;
+        var surfaceWater = (bool?)args["include_surface_water"] == true;
         var maxCells = (int?)args["max_cells"] ?? 20000;
         if (maxCells is < 100 or > 60000)
             throw new BridgeException("invalid_max_cells", "max_cells must be between 100 and 60000.");
@@ -74,6 +83,7 @@ public sealed partial class Plugin
         double elevationSum = 0;
         var elevationCount = 0;
         var bridges = new List<object>();
+        var surfaceWaterCells = 0;
 
         for (var row = 0; row < rows; row++)
         {
@@ -87,8 +97,14 @@ public sealed partial class Plugin
                 var nearest = graph.GetNearest(requested, constraint);
                 var node = nearest.node;
                 var snap = PlanarDistance(requested, nearest.position);
+                var mappedWater = surfaceWater && HasWaterSurface(requested.UnitySampleHeight());
+                if (mappedWater) surfaceWaterCells++;
                 char kind;
-                if (node == null)
+                if (mappedWater && node?.Tag is not (29 or 31))
+                {
+                    kind = KindWater;
+                }
+                else if (node == null)
                 {
                     kind = KindNoNode;
                 }
@@ -154,6 +170,7 @@ public sealed partial class Plugin
             cols,
             rows,
             cells,
+            surface_water_cells = surfaceWater ? surfaceWaterCells : (int?)null,
             bounds = new { min_x = minX, min_z = minZ, max_x = maxX, max_z = maxZ },
             legend = "G=ground R=road W=water B=inside building X=wall/unwalkable D=detached/void ?=no node b=bridge",
             counts = new

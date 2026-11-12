@@ -51,6 +51,8 @@
 | 2026-11-12 | 0.2.2 | 修复敌群消失后的攻击回执、部分搜刮回执和待确认任务的计数，加入 MCP 释放入口与无线电暂停保护 | `runtime/`、`coop.mjs`、`plugin/RadioDialogue.cs`、`plugin/Plugin.cs` |
 | 2026-11-12 | 0.2.2 | 允许按原生订单 ID 强制终止协作行动并提示原因；新增开火条件查询，战力评估读取实时射程、视线、冷却和补给 | `plugin/`、`server.mjs`、`i18n.mjs`、`tools-extra3.mjs`、`runtime/`、`scripts/Start-RuntimeChat.ps1`、`README.md`、`docs/i18n/` |
 
+| 2026-11-13 | 0.2.2 | 新增平民派工、施工、设施配置、实时天气和情绪，校正地图方位。标准 MCP 92 个工具，DSH 平民协作 65 个，纯只读 59 个 | `plugin/`、`server.mjs`、`tools-extra.mjs`、`config/`、`README.md` |
+
 ## 待办
 
 - 后续每次改动在此追加登记记录；补齐 P0 运行时后视情况新增 `0.2.txt`。

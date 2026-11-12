@@ -9,7 +9,8 @@
         args:
           - 'C:\path\to\InfectionFreeZone-MCP\server.mjs'
           - '--steam'
-          - '--read-only'
+          - '--workforce-only'
+          - '--allow-construction'
         cwd: 'C:\path\to\InfectionFreeZone-MCP'
         toolCallTimeoutMs: 15000
         failOnStartupError: false

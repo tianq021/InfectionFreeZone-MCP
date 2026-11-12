@@ -40,6 +40,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private Guid? lease;
     private string owner;
     private double leaseUntil;
+    private Guid? coopPauseRequestId;
     private Step step;
     private object lastStep;
 
@@ -141,10 +142,13 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             RefreshSession();
             UpdateMoves();
+            if (coopPauseRequestId.HasValue && !CanResumeCoopPause())
+                coopPauseRequestId = null;
             if (lease.HasValue && Now >= leaseUntil)
             {
                 FinishStep("lease_expired");
                 lease = null;
+                RecoverCoopPause();
             }
             if (step != null)
             {
@@ -193,6 +197,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         finishedWorldCommands.Clear();
         ResetRadioChoice();
         ClearRadioSelection();
+        pendingConstruction = null;
+        coopPauseRequestId = null;
         lastStep = null;
     }
 
@@ -204,6 +210,7 @@ public sealed partial class Plugin : BaseUnityPlugin
                 return new
                 {
                     version = "0.2.2",
+                    plugin_build_id = typeof(Plugin).Module.ModuleVersionId,
                     ready = sessionId.HasValue,
                     scene = SceneManager.GetActiveScene().name,
                     session_id = sessionId,
@@ -219,6 +226,30 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "get_world_data":
                 RequireSession(args);
                 return ReadWorld(args);
+            case "get_workforce":
+                RequireSession(args);
+                return ReadWorkforce(args);
+            case "get_current_weather":
+                RequireSession(args);
+                return ReadCurrentWeather();
+            case "get_mood":
+                RequireSession(args);
+                return ReadMood();
+            case "get_fog_of_war":
+                RequireSession(args);
+                return ReadFogOfWar(args);
+            case "get_construction_catalog":
+                RequireSession(args);
+                return ReadConstructionCatalog();
+            case "preview_construction":
+                RequireSession(args);
+                return PlanConstruction(args).Preview;
+            case "get_construction_order":
+                RequireSession(args);
+                return ReadConstructionOrder(args);
+            case "get_facilities":
+                RequireSession(args);
+                return ReadFacilities(args);
             case "get_map_buildings":
                 RequireSession(args);
                 return ReadMapBuildings(args);
@@ -270,6 +301,7 @@ public sealed partial class Plugin : BaseUnityPlugin
                 RequireLease(args);
                 FinishStep("lease_released");
                 lease = null;
+                RecoverCoopPause();
                 return new { released = true };
             case "get_order":
                 RequireSession(args);
@@ -285,7 +317,11 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "pause":
                 if (RadioOwnsPause())
                     throw new BridgeException("dialogue_choice_pending", "Finish the radio dialogue before pausing for a squad order.");
+                Guid? pauseRequestId = args["pause_request_id"] == null ? null : Id(args, "pause_request_id");
+                if (pauseRequestId.HasValue && (!Application.isFocused || TimeController.IsPaused || step != null))
+                    throw new BridgeException("game_blocked", "Co-op pause requires a running foreground game.");
                 FinishStep("requested_pause");
+                coopPauseRequestId = pauseRequestId;
                 speed.PauseGame();
                 return Snapshot();
             case "move_squad":
@@ -295,6 +331,10 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "move_npc_group":
             case "attack_group":
             case "set_building_workers":
+            case "update_work_task":
+            case "queue_construction":
+            case "set_facility_production":
+            case "set_facility_defense_weapon":
             case "equip_squad_member":
             case "refill_squad_member_ammo":
             case "scavenge_building":
@@ -302,6 +342,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "take_vehicle":
             case "cancel_squad_order":
             case "choose_dialogue_option":
+            case "cheat_apply":
                 return ExecuteWorldCommand(method, args);
             case "advance":
                 return StartStep(args);
@@ -330,6 +371,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             ready = true,
             session_id = sessionId,
+            pause_request_id = coopPauseRequestId,
             focused = Application.isFocused,
             time = new
             {
@@ -441,6 +483,9 @@ public sealed partial class Plugin : BaseUnityPlugin
         var allowBackground = (bool?)args["allow_background"] == true && Application.runInBackground;
         if ((!Application.isFocused && !allowBackground) || pauses.IsUIPaused || pauses.IsPopupPaused)
             throw new BridgeException("game_blocked", "Bring the game to the foreground and dismiss any blocking UI.");
+        if (args["pause_request_id"] != null &&
+            (coopPauseRequestId != Id(args, "pause_request_id") || !CanResumeCoopPause()))
+            throw new BridgeException("stale_pause", "The game no longer holds this co-op pause.");
         var seconds = (int?)args["seconds"];
         if (seconds is < 1 or > 12 || !seconds.HasValue)
             throw new BridgeException("invalid_seconds", "Use a whole number of seconds between 1 and 12.");
@@ -454,6 +499,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             speed.SetNormalSpeed();
             if (TimeController.IsPaused)
                 FinishStep("speed_locked");
+            else
+                coopPauseRequestId = null;
         }
         catch
         {
@@ -461,6 +508,15 @@ public sealed partial class Plugin : BaseUnityPlugin
             throw;
         }
         return Snapshot();
+    }
+
+    private bool CanResumeCoopPause() => pauses.IsOnlyGameplayPaused && !RadioOwnsPause();
+
+    private void RecoverCoopPause()
+    {
+        if (!coopPauseRequestId.HasValue) return;
+        coopPauseRequestId = null;
+        if (CanResumeCoopPause()) speed.SetNormalSpeed();
     }
 
     private void FinishStep(string reason)

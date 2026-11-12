@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { readAll, summarizeThreats, summarizeSquads } from "./tools-extra.mjs";
+import { compass, readAll, summarizeThreats, summarizeSquads } from "./tools-extra.mjs";
 import { listSaves, readZipEntry } from "./weather.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,13 +34,6 @@ function round(value, digits = 1) {
 
 function planar(ax, az, bx, bz) {
   return Math.sqrt((ax - bx) ** 2 + (az - bz) ** 2);
-}
-
-function compass(dx, dz) {
-  const angle = (Math.atan2(dx, -dz) * 180) / Math.PI;
-  const normalized = (angle + 360) % 360;
-  const labels = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
-  return labels[Math.round(normalized / 45) % 8];
 }
 
 function isHostile(group) {
