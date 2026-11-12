@@ -24,6 +24,8 @@ if (-not (Test-Path $chatClient)) {
     throw "找不到 chat-client: $chatClient"
 }
 
+. (Join-Path $repo 'scripts\ChatTranscript.ps1')
+
 $window = [Windows.Forms.Form]::new()
 $window.Text = 'DSH 游戏聊天'
 $window.TopMost = $true
@@ -57,20 +59,9 @@ $window.Controls.Add($composer)
 $window.Controls.Add($status)
 
 $pending = @{}
-$script:replyOpen = $false
-
-function Close-Reply {
-    if ($script:replyOpen) {
-        $transcript.AppendText("`r`n")
-        $script:replyOpen = $false
-    }
-}
 
 function Add-ChatLine([string]$speaker, [string]$text) {
-    Close-Reply
-    $stamp = (Get-Date).ToString('HH:mm:ss')
-    $transcript.AppendText("[$stamp] ${speaker}：$text`r`n")
-    $transcript.ScrollToCaret()
+    Add-ChatEntry $chatHistory $speaker $text
 }
 
 function Send-ChatMessage([bool]$interrupt) {
@@ -97,24 +88,18 @@ function Send-ChatMessage([bool]$interrupt) {
     } catch {
         Add-ChatLine '系统' '消息连接已中断，原文仍在输入框。'
     }
+    Update-ChatTranscript $chatHistory $transcript
 }
 
 function Show-ChatFrame($frame) {
     switch ($frame.type) {
         'status' { $status.Text = if ($frame.connected) { 'DSH 实时连接' } else { '正在连接 DSH…' } }
         'connected' { $status.Text = 'DSH 实时连接' }
-        'disconnected' { Close-Reply; $status.Text = '流式连接中断，正在重连…' }
-        'turn/end' { Close-Reply; $status.Text = 'DSH 回合结束' }
-        'reply_start' { Close-Reply }
-        'reply_end' { Close-Reply }
-        'reply_delta' {
-            if (!$script:replyOpen) {
-                Add-ChatLine 'DSH' ''
-                $script:replyOpen = $true
-            }
-            $transcript.AppendText([string]$frame.text)
-            $transcript.ScrollToCaret()
-        }
+        'disconnected' { Complete-ChatReply $chatHistory; $status.Text = '流式连接中断，正在重连…' }
+        'turn/end' { Complete-ChatReply $chatHistory; $status.Text = 'DSH 回合结束' }
+        'reply_start' { Complete-ChatReply $chatHistory }
+        'reply_end' { Complete-ChatReply $chatHistory }
+        'reply_delta' { Add-ChatReplyText $chatHistory ([string]$frame.text) }
         'accepted' {
             if ($pending.ContainsKey([string]$frame.requestId) -or $frame.claimed) {
                 $status.Text = if ($frame.claimed) { 'DSH 已读入对话' } else { 'DSH 已收件，等待读入对话' }
@@ -163,12 +148,16 @@ $timer.Add_Tick({
         if ($null -eq $line) {
             $timer.Stop()
             $script:nextLine = $null
+            Complete-ChatReply $chatHistory
+            Update-ChatTranscript $chatHistory $transcript
             $status.Text = '实时连接已停止，请重开浮窗'
             return
         }
         $script:nextLine = $worker.StandardOutput.ReadLineAsync()
         Show-ChatFrame ($line | ConvertFrom-Json)
     }
+    Update-ChatTranscript $chatHistory $transcript
+    if ($chatHistory.LogFailed) { $window.Text = 'DSH 游戏聊天（日志写入失败）' }
 })
 
 $info = [Diagnostics.ProcessStartInfo]::new((Get-Command node.exe -CommandType Application -ErrorAction Stop).Source)
@@ -180,14 +169,17 @@ $info.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
 $info.Arguments = '"{0}" {1}' -f $chatClient, $Port
 
 try {
+    $chatHistory = New-ChatTranscript (Join-Path $repo '.local\logs\chat')
     $worker = [Diagnostics.Process]::Start($info)
     $worker.StandardInput.AutoFlush = $true
     $script:nextLine = $worker.StandardOutput.ReadLineAsync()
     Add-ChatLine '系统' '回车优先插话，Ctrl+回车打断 DSH 回合。'
+    Update-ChatTranscript $chatHistory $transcript
     $timer.Start()
     [void]$window.ShowDialog()
 } finally {
     $timer.Dispose()
+    Close-ChatTranscript $chatHistory
     if ($worker) {
         try { $worker.StandardInput.Dispose() } finally { $worker.Dispose() }
     }

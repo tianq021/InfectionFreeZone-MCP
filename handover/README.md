@@ -79,6 +79,7 @@ Get-Process powershell | Where-Object MainWindowTitle | Select-Object Id, MainWi
 - **回车** = 优先插话（Agent 在下一步读到，会打断它的等待）
 - **Ctrl+回车** = 硬打断当前回合（等价 DSH 的 steer/中断）
 - 状态栏会显示：正在连接 / DSH 实时连接 / 已收件 / 已读入对话 / 投递未确认
+- 浮窗显示最近 50 条消息。完整记录保存在仓库的 `.local/logs/chat/`，每次打开浮窗新建一个日志文件。
 
 ### 兼容版做了什么（改了 4 处）
 
