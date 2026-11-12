@@ -162,6 +162,7 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
   for (const name of [
     "get_map_buildings", "get_navigation_point", "get_order", "get_state",
     "get_world_data", "status", "get_weather", "observe", "get_mission_plan", "get_active_dialogue",
+    "get_squad_experience", "get_weapon_details",
   ]) {
     assert.ok(names.has(name), `Missing read tool: ${name}`);
   }
@@ -174,6 +175,11 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
     assert.ok(!names.has(name), `Unexpected write tool: ${name}`);
   }
   assert.ok(tools.every(({ name }) => !name.startsWith("cheat_")));
+  for (const [name, filter] of [["get_squad_experience", "squad_id"], ["get_weapon_details", "weapon_id"]]) {
+    const schema = tools.find((tool) => tool.name === name).inputSchema;
+    assert.deepEqual(schema.required, ["session_id"]);
+    assert.equal(schema.properties[filter].type, "string");
+  }
 });
 
 test("浮窗消息越过等待中的游戏通知，独立接收读入回执、文本流和订单结果", async (t) => {

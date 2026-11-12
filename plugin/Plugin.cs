@@ -249,6 +249,12 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "get_active_dialogue":
                 RequireSession(args);
                 return ReadRadioDialogueReply();
+            case "get_squad_experience":
+                RequireSession(args);
+                return ReadSquadExperience(args);
+            case "get_weapon_details":
+                RequireSession(args);
+                return ReadWeaponDetails(args);
             case "acquire_control":
                 var requestedOwner = Text(args, "owner", 40);
                 if (lease.HasValue && ((string)args["lease"] != lease.Value.ToString() || requestedOwner != owner))

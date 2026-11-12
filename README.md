@@ -13,7 +13,7 @@
 
 ---
 
-> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **76 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
+> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **78 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
 >
 > 适用本机 **Steam build 26104777**、Windows x64、Unity Mono。最后更新：2026-11-12。
 
@@ -29,7 +29,7 @@
 - [2. 快速开始](#2-快速开始)（含[多语言](#多语言mcp-工具描述)）
 - [3. 构建、安装与升级（v0.2.2）](#3-构建安装与升级v022)
 - [4. 工程结构](#4-工程结构)
-- [5. 工具总览（76 个）](#5-工具总览76-个)
+- [5. 工具总览（78 个）](#5-工具总览78-个)
 - [6. 复合工具详解](#6-复合工具详解)
 - [7. 写入链路与人机协作](#7-写入链路与人机协作)
 - [8. 作弊/调试工具与使用政策](#8-作弊调试工具与使用政策)
@@ -47,9 +47,9 @@
 | 层 | 组成 | 说明 |
 |---|---|---|
 | 游戏层 | 《无感染区》Steam build `26104777` | 存档位于 `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
-| 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器，提供 **41 个桥接方法** |
+| 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器，提供 **43 个桥接方法** |
 | 桥接层 | Windows 命名管道 `\\.\pipe\infection-free-zone-mcp-steam-v1` | 同用户 ACL，单次调用 16–20 ms，整轮 7 类读取约 115 ms |
-| 服务层 | `server.mjs` | MCP stdio 服务，注册 **76 个工具**（41 桥接 + 1 天气 + 34 复合） |
+| 服务层 | `server.mjs` | MCP stdio 服务，注册 **78 个工具**（43 桥接 + 1 天气 + 34 复合） |
 | 客户端层 | DSH / Codex / `client.mjs` / 游戏内浮窗 / 只读监视器 | AI 通过 MCP 对话；玩家在游戏里用浮窗插话/打断 |
 
 **核心设计**
@@ -100,7 +100,7 @@ npm run tools:list
 
 ### 多语言（MCP 工具描述）
 
-- `node server.mjs --lang zh-CN|en|ja|ru`，或设置环境变量 `IFZ_MCP_LANG`；MCP 客户端读到的 76 个工具描述会切换语言（默认 `en`）。
+- `node server.mjs --lang zh-CN|en|ja|ru`，或设置环境变量 `IFZ_MCP_LANG`；MCP 客户端读到的 78 个工具描述会切换语言（默认 `en`）。
 - 翻译表在 [i18n.mjs](i18n.mjs)，缺失项自动回退英文；`stderr` 会打印 `[ifz-mcp] language=...` 便于确认。
 - 文档翻译：[English](docs/i18n/README.en.md) · [日本語](docs/i18n/README.ja.md) · [Русский](docs/i18n/README.ru.md)（配英文版架构/流程图为 `docs/i18n/images/`）。
 
@@ -134,7 +134,7 @@ Copy-Item plugin\bin\Release\netstandard2.1\IfzMcp.dll $target -Force
 
 ```powershell
 node client.mjs --steam status          # version 必须为 0.2.2
-npm run tools:list                      # 必须列出 76 个工具
+npm run tools:list                      # 必须列出 78 个工具
 ```
 
 ### 3.4 v0.2.2 新增内容一览
@@ -170,7 +170,7 @@ InfectionFreeZone-MCP/
 │  ├─ Missions.cs               # 任务详情、单任务完成
 │  ├─ Cheats.cs                 # 11 个作弊/调试桥接
 │  └─ Hud.cs                    # 游戏内 HUD 提示
-├─ server.mjs                   # MCP 服务（76 工具注册）
+├─ server.mjs                   # MCP 服务（78 工具注册）
 ├─ tools-extra.mjs              # 复合工具第一批（观察/经济/威胁/天气…）
 ├─ tools-extra2.mjs             # 第二批（地形报告/路线/搜刮计划/日报/岗位…）
 ├─ tools-extra3.mjs             # 第三批（敌人/感染变体/动物/中立/进度/暂停）
@@ -197,9 +197,9 @@ InfectionFreeZone-MCP/
 
 ---
 
-## 5. 工具总览（76 个）
+## 5. 工具总览（78 个）
 
-### 5.1 桥接·只读（14）
+### 5.1 桥接·只读（16）
 
 | 工具 | 说明 |
 |---|---|
@@ -217,6 +217,8 @@ InfectionFreeZone-MCP/
 | `get_vehicle_map` | **全图车辆**（含未发现）：类型/状态/油量/货物/距离 |
 | `get_missions` | **任务详情**：标题键/章节/限时/目标类型与进度/标记坐标 |
 | `get_active_dialogue` | 无线电正文、可选项、后果提示和上次选择后的台词 |
+| `get_squad_experience` | 队员的各项熟练度、已激活技能和当前武器实际射程 |
+| `get_weapon_details` | 武器的基础射程、伤害、攻击间隔、弹药和使用限制 |
 
 ### 5.2 桥接·写操作（16）
 
@@ -422,6 +424,12 @@ node client.mjs --steam wait_unpaused '{"timeout_s":30}'
 ---
 
 无线电可选回复会产生 `dialogue_options_available` 事件。读取和选择流程见 [Runtime 无线电剧情选择](runtime/README.md#无线电剧情选择)。
+
+### 6.7 小队经验和武器详情
+
+- `get_squad_experience` 接受可选的 `squad_id`。每名存活队员返回射击、近战、搜刮和驾驶的当前经验与上限，以及已激活技能、当前使用的武器和 `effective_range`。射程使用游戏对该队员的实际计算，包含神枪手技能修正。
+- `get_weapon_details` 接受可选的 `weapon_id`，例如 `eq_sniper_rifle`。武器目录给出聚落与远征基础射程、近距阈值、武器提示中的近远伤害、射击间隔、弹药、弹匣和使用条件。
+- 两个工具都使用 `get_state` 返回的 `session_id`，可在原生 MCP 的 `--read-only` 模式下调用。射程以游戏世界单位计。
 
 ## 7. 写入链路与人机协作
 

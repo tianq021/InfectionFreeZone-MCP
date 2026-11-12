@@ -121,6 +121,14 @@ tool("get_world_data", "Read a page from live game objects across the map. Nonpl
     "worksites", "vehicles", "stockrooms", "ground_resources", "stockpile", "resource_types", "map", "weapons", "events"]),
 });
 const entityId = z.string().min(1).max(64);
+tool("get_squad_experience", "Read each living squad member's shooting, melee, scavenging and driving experience, activated skills, current weapon and effective range. Omit squad_id to list all player squads.", {
+  session_id: session,
+  squad_id: entityId.optional(),
+});
+tool("get_weapon_details", "Read the game's weapon catalog, including base settlement and expedition ranges, close range, tooltip damage values, attack cooldown, ammunition and use restrictions. Omit weapon_id to list the catalog.", {
+  session_id: session,
+  weapon_id: entityId.optional(),
+});
 const coordinate = z.number().finite();
 const point = { x: coordinate, z: coordinate };
 registerMapQuery(tool, worldPage);
