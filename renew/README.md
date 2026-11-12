@@ -46,6 +46,7 @@
 | 2026-11-12 | 0.2.2 | 发布精选源码快照；补齐可运行的工具自检命令，更新只读模式测试与公开文档 | `package.json`、`scripts/check-tools.mjs`、`runtime/test/async-runtime.test.mjs`、`README.md`、`docs/i18n/*.md`、`handover/README.md`、`runtime/README.md`、`config/`、`renew/` |
 | 2026-11-12 | 0.2.2 | 修复长局历史限制和未知订单占用，加入本地写入认证、地图距离排序、岗位差分和分类等待 | `runtime/`、`plugin/Plugin.cs`、`plugin/UnitControl.cs`、`plugin/BuildingInfo.cs`、`plugin/Expedition.cs`、`config/codex.toml`、`README.md` |
 | 2026-11-12 | 0.2.2 | 两个聊天浮窗只显示最近 50 条消息，完整记录写入本地 UTF-8 日志 | `scripts/ChatTranscript.ps1`、`scripts/Start-RuntimeChat.ps1`、`handover/`、`runtime/README.md` |
+| 2026-11-12 | 0.2.2 | 无线电正文、选项后果提示、原生选择和后续台词；Runtime 发现可选回复时唤醒模型 | `plugin/RadioDialogue.cs`、`plugin/Plugin.cs`、`plugin/UnitControl.cs`、`plugin/IfzMcp.csproj`、`server.mjs`、`i18n.mjs`、`runtime/`、`README.md`、`docs/i18n/` |
 
 ## 待办
 

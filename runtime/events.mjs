@@ -39,6 +39,7 @@ export function meaningfulHash(state) {
     paused: state.time?.paused,
     focused: state.focused,
     headquarters: state.headquarters,
+    dialogue: state.dialogue ?? null,
     squads: state.squads ?? [],
     vehicles: state.vehicles ?? [],
     groups: state.groups ?? [],
@@ -105,6 +106,7 @@ const CATEGORY_KEYS = {
 export function diffState(prev, next) {
   if (!prev || !next) return null;
   const delta = { fromVersion: prev.version, toVersion: next.version };
+  if (!isDeepStrictEqual(prev.dialogue ?? null, next.dialogue ?? null)) delta.dialogue = next.dialogue ?? null;
   for (const [category, key] of Object.entries(CATEGORY_KEYS)) {
     const before = prev[category] ?? [];
     const after = next[category] ?? [];

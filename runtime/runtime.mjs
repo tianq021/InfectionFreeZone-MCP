@@ -7,6 +7,7 @@ import { ExecService } from "./exec-service.mjs";
 import { Scheduler } from "./scheduler.mjs";
 import { DshClient } from "./dsh-client.mjs";
 import { runtimeToken } from "./token.mjs";
+import { createDialogueChooser } from "./dialogue.mjs";
 import { z } from "zod";
 
 const args = process.argv.slice(2);
@@ -26,6 +27,7 @@ const squadIds = option("--squads")?.split(",").map((id) => id.trim()).filter(Bo
 const dshSessionId = option("--dsh-session");
 const dshHome = option("--dsh-home", process.env.DSH_HOME);
 const enableActions = hasFlag("--enable-actions");
+const enableDialogueChoices = enableActions || hasFlag("--enable-dialogue-choices");
 const uuid = z.string().uuid();
 if (enableActions && (!uuid.safeParse(gameSessionId).success || !playerSquadId || !squadIds.length || squadIds.includes(playerSquadId)))
   throw new Error("--enable-actions requires --game-session UUID, --player-squad ID and --squads ID,ID excluding the player.");
@@ -47,8 +49,9 @@ const scheduler = dshSessionId ? new Scheduler({
   getAssignment: executor ? () => executor.assignment() : undefined,
 }) : null;
 const requireToken = hasFlag("--require-token");
-const token = executor || scheduler || requireToken ? runtimeToken({ create: true }) : undefined;
-const hub = createHub({ stateService: service, executor, scheduler, port, token, requireToken });
+const chooseDialogue = enableDialogueChoices ? createDialogueChooser({ pipe, stateService: service, gameSessionId }) : null;
+const token = executor || scheduler || chooseDialogue || requireToken ? runtimeToken({ create: true }) : undefined;
+const hub = createHub({ stateService: service, executor, scheduler, chooseDialogue, port, token, requireToken });
 
 service.on("event", (event) => {
   if (event.type === "bridge_offline" || event.type === "bridge_restored" || event.type === "session_changed") {
@@ -57,8 +60,8 @@ service.on("event", (event) => {
 });
 
 const boundPort = await hub.listen();
-await service.start();
 scheduler?.start();
+await service.start();
 log("runtime_started", {
   url: `http://127.0.0.1:${boundPort}`,
   steam,

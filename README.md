@@ -13,7 +13,7 @@
 
 ---
 
-> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **74 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
+> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **76 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
 >
 > 适用本机 **Steam build 26104777**、Windows x64、Unity Mono。最后更新：2026-11-12。
 
@@ -29,7 +29,7 @@
 - [2. 快速开始](#2-快速开始)（含[多语言](#多语言mcp-工具描述)）
 - [3. 构建、安装与升级（v0.2.2）](#3-构建安装与升级v022)
 - [4. 工程结构](#4-工程结构)
-- [5. 工具总览（74 个）](#5-工具总览74-个)
+- [5. 工具总览（76 个）](#5-工具总览76-个)
 - [6. 复合工具详解](#6-复合工具详解)
 - [7. 写入链路与人机协作](#7-写入链路与人机协作)
 - [8. 作弊/调试工具与使用政策](#8-作弊调试工具与使用政策)
@@ -47,15 +47,15 @@
 | 层 | 组成 | 说明 |
 |---|---|---|
 | 游戏层 | 《无感染区》Steam build `26104777` | 存档位于 `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
-| 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器，提供 **36 个桥接方法** |
+| 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器，提供 **41 个桥接方法** |
 | 桥接层 | Windows 命名管道 `\\.\pipe\infection-free-zone-mcp-steam-v1` | 同用户 ACL，单次调用 16–20 ms，整轮 7 类读取约 115 ms |
-| 服务层 | `server.mjs` | MCP stdio 服务，注册 **74 个工具**（36 桥接 + 1 天气 + 37 复合） |
+| 服务层 | `server.mjs` | MCP stdio 服务，注册 **76 个工具**（41 桥接 + 1 天气 + 34 复合） |
 | 客户端层 | DSH / Codex / `client.mjs` / 游戏内浮窗 / 只读监视器 | AI 通过 MCP 对话；玩家在游戏里用浮窗插话/打断 |
 
 **核心设计**
 
 - **只读优先**：绝大多数分析用复合工具一次聚合（`observe`、`get_daily_report`、`get_mission_plan`…），减少往返与 token。
-- **写入受控**：所有游戏写入要求「写租约 + 显式暂停 + 请求 UUID」，未知结果可用同一 `request_id` 安全重试。
+- **写入受控**：常规游戏订单写入要求「写租约 + 显式暂停 + 请求 UUID」，未知结果可用同一 `request_id` 安全重试。
 - **作弊兜底**：11 个 `cheat_*` 工具只在紧急情况由 AI 判断使用，默认走正常玩法。
 - **离线可用**：天气、进度解锁、存档信息直接从 `data.json` 读取，不需要游戏在运行。
 
@@ -100,7 +100,7 @@ npm run tools:list
 
 ### 多语言（MCP 工具描述）
 
-- `node server.mjs --lang zh-CN|en|ja|ru`，或设置环境变量 `IFZ_MCP_LANG`；MCP 客户端读到的 74 个工具描述会切换语言（默认 `en`）。
+- `node server.mjs --lang zh-CN|en|ja|ru`，或设置环境变量 `IFZ_MCP_LANG`；MCP 客户端读到的 76 个工具描述会切换语言（默认 `en`）。
 - 翻译表在 [i18n.mjs](i18n.mjs)，缺失项自动回退英文；`stderr` 会打印 `[ifz-mcp] language=...` 便于确认。
 - 文档翻译：[English](docs/i18n/README.en.md) · [日本語](docs/i18n/README.ja.md) · [Русский](docs/i18n/README.ru.md)（配英文版架构/流程图为 `docs/i18n/images/`）。
 
@@ -134,7 +134,7 @@ Copy-Item plugin\bin\Release\netstandard2.1\IfzMcp.dll $target -Force
 
 ```powershell
 node client.mjs --steam status          # version 必须为 0.2.2
-npm run tools:list                      # 必须列出 74 个工具
+npm run tools:list                      # 必须列出 76 个工具
 ```
 
 ### 3.4 v0.2.2 新增内容一览
@@ -170,7 +170,7 @@ InfectionFreeZone-MCP/
 │  ├─ Missions.cs               # 任务详情、单任务完成
 │  ├─ Cheats.cs                 # 11 个作弊/调试桥接
 │  └─ Hud.cs                    # 游戏内 HUD 提示
-├─ server.mjs                   # MCP 服务（74 工具注册）
+├─ server.mjs                   # MCP 服务（76 工具注册）
 ├─ tools-extra.mjs              # 复合工具第一批（观察/经济/威胁/天气…）
 ├─ tools-extra2.mjs             # 第二批（地形报告/路线/搜刮计划/日报/岗位…）
 ├─ tools-extra3.mjs             # 第三批（敌人/感染变体/动物/中立/进度/暂停）
@@ -197,9 +197,9 @@ InfectionFreeZone-MCP/
 
 ---
 
-## 5. 工具总览（74 个）
+## 5. 工具总览（76 个）
 
-### 5.1 桥接·只读（13）
+### 5.1 桥接·只读（14）
 
 | 工具 | 说明 |
 |---|---|
@@ -216,13 +216,14 @@ InfectionFreeZone-MCP/
 | `get_expedition_tiles` | **远征地块**：类型/位置/资源图标/搜刮进度/已获资源 |
 | `get_vehicle_map` | **全图车辆**（含未发现）：类型/状态/油量/货物/距离 |
 | `get_missions` | **任务详情**：标题键/章节/限时/目标类型与进度/标记坐标 |
+| `get_active_dialogue` | 无线电正文、可选项、后果提示和上次选择后的台词 |
 
-### 5.2 桥接·写操作（15）
+### 5.2 桥接·写操作（16）
 
 | 工具 | 说明 |
 |---|---|
 | `acquire_control` / `release_control` | 领取/续租/释放写租约（默认 90 秒） |
-| `pause` | 显式暂停（写入前必需） |
+| `pause` | 显式暂停（常规订单写入前必需） |
 | `advance` | 有界推进（1–12 墙钟秒，`keep_running` 保持 1x） |
 | `hud_message` | 游戏内 HUD 短提示 |
 | `move_squad` | 小队移动（6–100 单位/步，`replace_orders` 覆盖） |
@@ -235,6 +236,7 @@ InfectionFreeZone-MCP/
 | `set_building_workers` | 调整工地岗位上限 |
 | `equip_squad_member` | 从背包/库存装备武器 |
 | `refill_squad_member_ammo` | 从容器补充弹药 |
+| `choose_dialogue_option` | 通过游戏原生按钮提交当前无线电选项 |
 
 ### 5.3 桥接·作弊/调试（11，紧急使用）
 
@@ -252,7 +254,7 @@ InfectionFreeZone-MCP/
 | `cheat_spawn_squad` | 指定坐标刷小队 |
 | `cheat_reveal_groups` | 显示全部敌对群（含隐藏） |
 
-### 5.4 本地/复合（37 + 天气）
+### 5.4 本地/复合（34 + 天气）
 
 **基础聚合**
 
@@ -418,6 +420,8 @@ node client.mjs --steam wait_unpaused '{"timeout_s":30}'
 - 暂停四类：`popup_pause`（弹窗，需玩家点）/ `ui_pause`（面板，Esc）/ `paused`（空格）/ 失焦降频
 
 ---
+
+无线电可选回复会产生 `dialogue_options_available` 事件。读取和选择流程见 [Runtime 无线电剧情选择](runtime/README.md#无线电剧情选择)。
 
 ## 7. 写入链路与人机协作
 

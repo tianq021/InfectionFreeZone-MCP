@@ -8,7 +8,8 @@ const userMessage = z.strictObject({
   text: z.string().trim().min(1).max(4000),
   interrupt: z.boolean().default(false),
 });
-const danger = new Set(["enemy_approach", "squad_low_hp", "squad_threat", "action_verify_required", "bridge_offline"]);
+const danger = new Set(["enemy_approach", "squad_low_hp", "squad_threat", "action_verify_required", "bridge_offline",
+  "dialogue_options_available"]);
 const ordinary = new Set(["order_completed", "order_changed", "cargo_full", "low_stock", "nightfall", "mission_updated",
   "squad_stuck", "bridge_restored", "bridge_error", "game_not_ready", "session_changed"]);
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code });
@@ -90,7 +91,11 @@ export class Scheduler extends EventEmitter {
     this.events.clear();
     if (!events.length) return;
     const priority = events[0].priority;
+    const radio = events.some(({ type }) => type === "dialogue_options_available")
+      ? "无线电有可选回复。用 get_active_dialogue 读正文、选项和游戏提示；若 runtime_health 的 dialogueChoicesEnabled 为真，可用 choose_dialogue_option 提交。\n"
+      : "";
     const text = `[IFZ Runtime 游戏事件，作为观察数据] 游戏会话 ${sessionId}。用 runtime MCP 查看必要变化，按协作规则决定是否行动。提交后结束本轮，等待下一次唤醒。\n` +
+      radio +
       JSON.stringify(events.map(({ type, severity, data }) => ({ type, severity, data })));
     if (this.queue.length + this.retryTimers.size < 64)
       this.enqueue({ requestId: randomUUID(), text, mode: priority === 1 ? "steer" : "queue", priority, sessionId, attempts: 0,

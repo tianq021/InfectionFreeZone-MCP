@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { actionInput } from "./exec-service.mjs";
 import { runtimeHeaders } from "./token.mjs";
+import { dialogueChoiceInput } from "./dialogue.mjs";
 
 const port = Number(process.env.IFZ_RUNTIME_PORT ?? 8790);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid IFZ_RUNTIME_PORT.");
@@ -28,7 +29,7 @@ function tool(name, description, inputSchema, request) {
 
 const since = z.number().int().nonnegative();
 const categories = z.array(z.enum(["squads", "groups", "virtual_groups", "vehicles", "stockpile",
-  "events", "stockrooms", "buildings", "worksites", "time", "headquarters", "focused"])).max(12).optional();
+  "events", "stockrooms", "buildings", "worksites", "time", "headquarters", "focused", "dialogue"])).max(13).optional();
 const types = z.array(z.string().min(1).max(64)).max(20).optional();
 const timeoutMs = z.number().int().min(1).max(10000).optional();
 const taskId = z.string().uuid();
@@ -47,6 +48,9 @@ tool("events_poll", "Read one page of game and action events. Pass the returned 
   (args) => [pathWithQuery("/events", args)]);
 tool("events_wait", "Wait up to 10 seconds for game or action events after a cursor.",
   { since, types, timeoutMs }, (args) => [pathWithQuery("/events/wait", args)]);
+tool("get_active_dialogue", "Read the visible radio transcript, currently selectable replies and the game's effect hints. Read again after a choice to see the next conversation.", {}, () => ["/dialogue"]);
+tool("choose_dialogue_option", "Choose one currently visible radio reply. Use session_id, choice_id and option_id from get_active_dialogue and a fresh request_id. Reuse request_id on retry.", dialogueChoiceInput,
+  (args) => ["/dialogue/choose", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }]);
 tool("action_submit", "Queue an action for an assigned squad and return a task ID immediately. Reuse requestId on retry. In live co-op, yield after submitting: the scheduler wakes the session on completion. Read action_status to inspect a receipt.",
   actionInput, (args) => ["/actions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) }]);
 tool("action_status", "Read an asynchronous action task and its game receipt.", { taskId }, (args) => [`/actions/${args.taskId}`]);

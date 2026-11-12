@@ -12,6 +12,7 @@ using Gameplay.Units;
 using Gameplay.Units.Orders;
 using HarmonyLib;
 using Newtonsoft.Json.Linq;
+using TransmissionSystem;
 using UI.Clock;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -76,6 +77,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             Capture(harmony, typeof(SquadsController), nameof(CaptureSquads));
             Capture(harmony, typeof(PauseController), nameof(CapturePauses));
             Capture(harmony, typeof(TimeSpeedSetter), nameof(CaptureSpeed));
+            Capture(harmony, typeof(TransmissionManager), nameof(CaptureRadio));
             CaptureWorld(harmony);
             SceneManager.activeSceneChanged += OnSceneChanged;
             bridge = new PipeBridge(pipeName, sid, message => Logger.LogError(message));
@@ -128,6 +130,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void OnDestroy()
     {
         SceneManager.activeSceneChanged -= OnSceneChanged;
+        ClearRadioSelection();
         bridge?.Dispose();
     }
 
@@ -188,6 +191,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         finishedMoves.Clear();
         worldCommands.Clear();
         finishedWorldCommands.Clear();
+        ResetRadioChoice();
+        ClearRadioSelection();
         lastStep = null;
     }
 
@@ -241,6 +246,9 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "get_missions":
                 RequireSession(args);
                 return ReadMissions(args);
+            case "get_active_dialogue":
+                RequireSession(args);
+                return ReadRadioDialogueReply();
             case "acquire_control":
                 var requestedOwner = Text(args, "owner", 40);
                 if (lease.HasValue && ((string)args["lease"] != lease.Value.ToString() || requestedOwner != owner))
@@ -281,6 +289,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "scavenge_building":
             case "return_to_stockroom":
             case "take_vehicle":
+            case "choose_dialogue_option":
                 return ExecuteWorldCommand(method, args);
             case "advance":
                 return StartStep(args);
@@ -323,6 +332,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             },
             headquarters = Position(HqController.MainHeadquarter.Position),
             headquarters_id = StockroomId(HqController.MainHeadquarter),
+            dialogue = ReadRadioDialogue(),
             squads = squads.Squads.Where(squad => squad != null && !squad.IsDestroying).Select(squad => new
             {
                 id = squad.Id.ToString(),

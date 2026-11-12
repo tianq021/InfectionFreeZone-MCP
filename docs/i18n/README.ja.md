@@ -1,7 +1,7 @@
 # Infection Free Zone MCP · v0.2.2（日本語）
 
 > 『Infection Free Zone』（Steam build `26104777`、Windows x64、Unity Mono）向けの人間×AI 協調 MCP ブリッジです。
-> BepInEx プラグインが Unity メインスレッドでゲームを読み書きし、Node.js サーバーが **74 個の MCP ツール**を stdio で公開します。DSH / Codex などの AI クライアントは、拠点の状況を読み、ネイティブ命令を出し、プレイヤーと 1 倍速で協調プレイできます。
+> BepInEx プラグインが Unity メインスレッドでゲームを読み書きし、Node.js サーバーが **76 個の MCP ツール**を stdio で公開します。DSH / Codex などの AI クライアントは、拠点の状況を読み、ネイティブ命令を出し、プレイヤーと 1 倍速で協調プレイできます。
 
 **言語：** [简体中文](../../README.md) · [English](README.en.md) · **日本語** · [Русский](README.ru.md)
 
@@ -17,9 +17,9 @@
 | 層 | 構成 | 説明 |
 |---|---|---|
 | ゲーム | Infection Free Zone（Steam `26104777`） | セーブ: `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
-| プラグイン | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 + Harmony、**36 個のブリッジメソッド** |
+| プラグイン | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 + Harmony、**41 個のブリッジメソッド** |
 | ブリッジ | 名前付きパイプ `\\.\pipe\infection-free-zone-mcp-steam-v1` | 1 回 16–20 ms |
-| サーバー | `server.mjs` | **74 ツール**（36 ブリッジ + 1 天気 + 37 複合） |
+| サーバー | `server.mjs` | **76 ツール**（41 ブリッジ + 1 天気 + 34 複合） |
 | クライアント | DSH / Codex / `client.mjs` / ゲーム内チャット窓 / 読み取り専用監視 | AI が人間と一緒にプレイ |
 
 **設計方針**
@@ -42,7 +42,7 @@ node client.mjs --steam get_mission_plan '{}'
 node client.mjs --steam get_enemy_report '{}'
 node client.mjs --steam find_buildings_by_poi '{"poi":["Gun","Fuel"]}'
 node client.mjs --steam get_vehicle_map '{}'
-npm run tools:list                         # 74 ツール（ゲーム不要）
+npm run tools:list                         # 76 ツール（ゲーム不要）
 ```
 
 `client.mjs` はインライン JSON か `@args.json`（PowerShell 5.1 では推奨）を受け付けます。
@@ -50,7 +50,9 @@ npm run tools:list                         # 74 ツール（ゲーム不要）
 
 ---
 
-## 3. 主なツール（74）
+## 3. 主なツール（76）
+
+`get_active_dialogue` で無線の本文、選択肢、ゲーム内の効果ヒントを確認し、`choose_dialogue_option` で返答を選べます。選択後の台詞と設定は [Runtime の無線ガイド](../../runtime/README.md#无线电剧情选择)を参照してください。
 
 ### 3.1 読み取り（13）
 `status`、`get_state`、`get_order`、`get_world_data`（14 カテゴリ）、`get_map_buildings`、
@@ -115,8 +117,8 @@ get_state → acquire_control → pause → 注文(request_id) → advance(keep_
 ## 6. リポジトリ構成
 
 ```text
-plugin/            C# BepInEx プラグイン（36 ブリッジ）
-server.mjs         MCP サーバー（74 ツール）
+plugin/            C# BepInEx プラグイン（41 ブリッジ）
+server.mjs         MCP サーバー（76 ツール）
 tools-extra*.mjs   複合ツール（4 バッチ）
 weather.mjs        セーブ天気パーサ（オフライン）
 client.mjs         CLI クライアント（--steam / --lang / @args.json）

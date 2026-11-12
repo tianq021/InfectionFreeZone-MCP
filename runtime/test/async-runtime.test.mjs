@@ -161,7 +161,7 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
   const names = new Set(tools.map(({ name }) => name));
   for (const name of [
     "get_map_buildings", "get_navigation_point", "get_order", "get_state",
-    "get_world_data", "status", "get_weather", "observe", "get_mission_plan",
+    "get_world_data", "status", "get_weather", "observe", "get_mission_plan", "get_active_dialogue",
   ]) {
     assert.ok(names.has(name), `Missing read tool: ${name}`);
   }
@@ -169,7 +169,7 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
     "acquire_control", "release_control", "pause", "advance", "hud_message",
     "move_squad", "move_npc_group", "attack_group", "scavenge_building",
     "return_to_stockroom", "take_vehicle", "set_stockpile_amount", "set_building_workers",
-    "equip_squad_member", "refill_squad_member_ammo", "export_snapshot",
+    "equip_squad_member", "refill_squad_member_ammo", "export_snapshot", "choose_dialogue_option",
   ]) {
     assert.ok(!names.has(name), `Unexpected write tool: ${name}`);
   }

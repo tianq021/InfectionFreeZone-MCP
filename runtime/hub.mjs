@@ -55,11 +55,11 @@ function stream(response, scheduler) {
   write({ type: "status", ...scheduler.health() });
 }
 
-export function createHub({ stateService, executor, scheduler, host = "127.0.0.1", port = 8790,
+export function createHub({ stateService, executor, scheduler, chooseDialogue, host = "127.0.0.1", port = 8790,
   token, requireToken = false, logger = console } = {}) {
   if (!stateService) throw new Error("createHub needs a stateService.");
   if (host !== "127.0.0.1") throw new Error("The runtime HTTP API is local to 127.0.0.1.");
-  if ((executor || scheduler || requireToken) && !token) throw new Error("The runtime HTTP API needs a token.");
+  if ((executor || scheduler || chooseDialogue || requireToken) && !token) throw new Error("The runtime HTTP API needs a token.");
   const expected = token && Buffer.from(token);
   const writes = new Map();
   const server = http.createServer(async (request, response) => {
@@ -71,7 +71,8 @@ export function createHub({ stateService, executor, scheduler, host = "127.0.0.1
       const url = new URL(request.url ?? "/", origin);
       const actionId = /^\/actions\/([0-9a-f-]{36})$/i.exec(url.pathname)?.[1];
       const resolveId = /^\/actions\/([0-9a-f-]{36})\/resolve$/i.exec(url.pathname)?.[1];
-      const writeRoute = (request.method === "POST" && (url.pathname === "/actions" || url.pathname === "/messages" || resolveId)) ||
+      const writeRoute = (request.method === "POST" &&
+        (url.pathname === "/actions" || url.pathname === "/messages" || url.pathname === "/dialogue/choose" || resolveId)) ||
         (request.method === "DELETE" && actionId);
       if (expected && (writeRoute || requireToken || url.pathname === "/stream")) {
         const provided = Buffer.from(request.headers["x-ifz-token"] ?? "");
@@ -103,6 +104,10 @@ export function createHub({ stateService, executor, scheduler, host = "127.0.0.1
         if (!scheduler) return send(response, 503, { ok: false, code: "scheduler_disabled" });
         return send(response, 200, { ok: true, ...await scheduler.sendUserMessage(await readJson(request)) });
       }
+      if (request.method === "POST" && url.pathname === "/dialogue/choose") {
+        if (!chooseDialogue) return send(response, 503, { ok: false, code: "dialogue_choices_disabled" });
+        return send(response, 200, await chooseDialogue(await readJson(request)));
+      }
       if (request.method !== "GET") return send(response, 405, { ok: false, code: "method_not_allowed" });
       if (url.pathname === "/stream") {
         if (!scheduler) return send(response, 503, { ok: false, code: "scheduler_disabled" });
@@ -116,14 +121,23 @@ export function createHub({ stateService, executor, scheduler, host = "127.0.0.1
           routes: ["/health", "/state?since=<v>&cats=squads,groups", "/state/wait?since=<v>&timeoutMs=5000",
             "/events?since=<cursor>&types=enemy_approach", "/events/wait?since=<cursor>&timeoutMs=5000",
             ...(executor ? ["/actions", "/actions/<id>"] : []),
+            "/dialogue", ...(chooseDialogue ? ["/dialogue/choose"] : []),
             ...(scheduler ? ["/messages", "/stream"] : [])],
         });
       }
 
       if (url.pathname === "/health") return send(response, 200, {
         ...stateService.health(), executorEnabled: Boolean(executor), assignment: executor?.assignment() ?? null,
+        dialogueChoicesEnabled: Boolean(chooseDialogue),
         dsh: scheduler?.health() ?? null,
       });
+
+      if (url.pathname === "/dialogue") {
+        if (!stateService.online || !stateService.ready || !stateService.state)
+          return send(response, 503, { ok: false, code: "game_not_ready" });
+        const result = await stateService.bridgeCall("get_active_dialogue", { session_id: stateService.state.sessionId });
+        return send(response, result.ok ? 200 : 502, result);
+      }
 
       if (url.pathname === "/state") {
         const since = numberParam(url, "since");

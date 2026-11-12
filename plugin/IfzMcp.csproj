@@ -10,11 +10,14 @@
     <Reference Include="BepInEx" HintPath="$(BepInExCore)/BepInEx.dll" Private="false" />
     <Reference Include="0Harmony" HintPath="$(BepInExCore)/0Harmony.dll" Private="false" />
     <Reference Include="Ifz" HintPath="$(IfzManaged)/Ifz.dll" Private="false" />
+    <Reference Include="CallSystem" HintPath="$(IfzManaged)/CallSystem.dll" Private="false" />
     <Reference Include="MapOperator" HintPath="$(IfzManaged)/MapOperator.dll" Private="false" />
     <Reference Include="Newtonsoft.Json" HintPath="$(IfzManaged)/Newtonsoft.Json.dll" Private="false" />
     <Reference Include="UnityEngine" HintPath="$(IfzManaged)/UnityEngine.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(IfzManaged)/UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="UnityEngine.IMGUIModule" HintPath="$(IfzManaged)/UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(IfzManaged)/UnityEngine.UI.dll" Private="false" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(IfzManaged)/Unity.TextMeshPro.dll" Private="false" />
     <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(IfzManaged)/UnityEngine.TextRenderingModule.dll" Private="false" />
     <Reference Include="Zenject" HintPath="$(IfzManaged)/Zenject.dll" Private="false" />
     <Reference Include="AstarPathfindingProject" HintPath="$(IfzManaged)/AstarPathfindingProject.dll" Private="false" />

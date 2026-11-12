@@ -8,6 +8,7 @@ import { registerExtraTools } from "./tools-extra.mjs";
 import { registerMoreTools } from "./tools-extra2.mjs";
 import { registerEnemyTools } from "./tools-extra3.mjs";
 import { registerTools4 } from "./tools-extra4.mjs";
+import { dialogueChoiceInput } from "./runtime/dialogue.mjs";
 import { localizeDescription, resolveLanguage, LANGUAGE_LABELS, SUPPORTED_LANGUAGES } from "./i18n.mjs";
 
 const language = resolveLanguage();
@@ -103,6 +104,8 @@ function localTool(name, description, inputSchema, handler) {
 
 tool("status", "Check whether the configured IFZ game and its current settlement are ready.", {});
 tool("get_state", "Read time, pause reasons, HQ, player squads and the last bounded advance.", {});
+tool("get_active_dialogue", "Read the visible radio conversation, selectable replies and the effects listed by the game. A null dialogue means no radio conversation is currently open.", { session_id: session });
+writeTool("choose_dialogue_option", "Select a reply in the current radio conversation using the latest choice_id and option_id. Acquire the write lease and reuse request_id on retry. The game applies the reply and its own pause rules.", { ...dialogueChoiceInput, lease });
 writeTool("hud_message", "Show a short message on the in-game HUD overlay so the player can read AI updates and alerts without leaving the game.", {
   text: z.string().trim().min(1).max(500),
   seconds: z.number().int().min(3).max(3600).optional(),

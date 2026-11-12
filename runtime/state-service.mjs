@@ -19,6 +19,7 @@ const FIELD_BY_CATEGORY = {
   squads: "squads", vehicles: "vehicles", groups: "groups", virtual_groups: "virtualGroups",
   stockpile: "stockpile", events: "events", stockrooms: "stockrooms",
   buildings: "buildings", worksites: "worksites", weapons: "weapons",
+  dialogue: "dialogue",
 };
 const CATEGORY_BY_FIELD = Object.fromEntries(Object.entries(FIELD_BY_CATEGORY).map(([category, field]) => [field, category]));
 
@@ -53,6 +54,7 @@ export class StateService extends EventEmitter {
     this.pollSeq = 0;
     this.events = [];
     this.eventCursor = 0;
+    this.lastDialogueChoiceId = null;
     this.history = [];
     this.lastDiff = null;
     this.online = false;
@@ -121,6 +123,7 @@ export class StateService extends EventEmitter {
       const sessionChanged = this.state != null && this.state.sessionId !== sessionId;
       if (sessionChanged) {
         this.engine.reset();
+        this.lastDialogueChoiceId = null;
         this.mediumCache = { stockpile: [], events: [], stockrooms: [] };
         this.slowCache = { worksites: [], weapons: [] };
         this.mapCache = { items: [], error: null, pending: null };
@@ -152,6 +155,15 @@ export class StateService extends EventEmitter {
       } else if (previous == null) {
         // first snapshot: prime the engine without emitting a burst of "new" events
         this.engine.detect(null, next);
+      }
+      const choice = next.dialogue;
+      if (choice?.choice_id && choice.choice_id !== this.lastDialogueChoiceId) {
+        this.lastDialogueChoiceId = choice.choice_id;
+        emitted.push({ type: "dialogue_options_available", severity: "warn",
+          dedupeKey: `radio:${choice.choice_id}`, at: now, data: {
+            sessionId, choiceId: choice.choice_id, transmissionId: choice.transmission_id,
+            optionCount: choice.options?.filter(({ selectable }) => selectable).length ?? 0,
+          } });
       }
       if (sessionChanged) {
         this.pushEvent({ type: "session_changed", severity: "warn", dedupeKey: `session:${sessionId}`, data: { sessionId } });
@@ -292,6 +304,7 @@ export class StateService extends EventEmitter {
       ready: true,
       focused: Boolean(stateReply.focused),
       time: stateReply.time ?? null,
+      dialogue: stateReply.dialogue ?? null,
       headquarters: stateReply.headquarters ?? null,
       game: {
         scene: stateReply.scene ?? stateReply.mode ?? null,
@@ -356,7 +369,7 @@ export class StateService extends EventEmitter {
     const filtered = { fromVersion: delta.fromVersion, toVersion: delta.toVersion };
     for (const field of fields) {
       const category = reverse.get(field) ?? field;
-      if (delta[field]) filtered[category] = delta[field];
+      if (Object.hasOwn(delta, field)) filtered[category] = delta[field];
     }
     if (delta.header) filtered.header = delta.header;
     return filtered;
@@ -371,7 +384,7 @@ export class StateService extends EventEmitter {
     for (const delta of chain) {
       for (const [key, value] of Object.entries(delta)) {
         if (key === "fromVersion" || key === "toVersion") continue;
-        if (key === "header") { merged.header = value; continue; }
+        if (key === "header" || key === "dialogue") { merged[key] = value; continue; }
         if (!merged[key]) merged[key] = { added: [], updated: [], removed: [] };
         if (Array.isArray(value?.added)) merged[key].added.push(...value.added);
         if (Array.isArray(value?.updated)) merged[key].updated.push(...value.updated);

@@ -42,7 +42,7 @@ public sealed partial class Plugin
                 throw new BridgeException("result_unknown", "Read game state before attempting another write.");
             return previous.Result;
         }
-        RequirePausedWorld();
+        if (method != "choose_dialogue_option") RequirePausedWorld();
         var command = new WorldCommand(method, input);
         worldCommands.Add(id, command);
         try
@@ -57,6 +57,7 @@ public sealed partial class Plugin
                 "scavenge_building" => ScavengeBuilding(args),
                 "return_to_stockroom" => ReturnToStockroom(args),
                 "take_vehicle" => TakeVehicle(args),
+                "choose_dialogue_option" => ChooseRadioOption(args),
                 _ => throw new BridgeException("unknown_method", "Unknown world command.")
             };
             return command.Result;
