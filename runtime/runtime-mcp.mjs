@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { actionInput } from "./exec-service.mjs";
+import { actionInput, stopActionInput } from "./exec-service.mjs";
 import { runtimeHeaders } from "./token.mjs";
 import { dialogueChoiceInput } from "./dialogue.mjs";
 
@@ -56,5 +56,11 @@ tool("action_submit", "Queue an action for an assigned squad and return a task I
 tool("action_status", "Read an asynchronous action task and its game receipt.", { taskId }, (args) => [`/actions/${args.taskId}`]);
 tool("action_cancel", "Cancel a queued action or stop it before submission.", { taskId },
   (args) => [`/actions/${args.taskId}`, { method: "DELETE" }]);
+tool("action_force_stop", "Stop a tracked AI action, including a native order already accepted by the game. Provide the reason for the player's notification. Check stopReceipt for any other orders still in the queue before submitting a retreat.",
+  { taskId, ...stopActionInput }, ({ taskId, reason }) => [`/actions/${taskId}/stop`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }),
+  }]);
+tool("action_resolve", "Release an unresolved action after checking the outcome. The runtime rechecks that the squad has no active or queued native orders and preserves the unknown result.", { taskId },
+  (args) => [`/actions/${args.taskId}/resolve`, { method: "POST" }]);
 
 await server.connect(new StdioServerTransport());

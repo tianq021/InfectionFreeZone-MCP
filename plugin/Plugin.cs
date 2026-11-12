@@ -255,6 +255,9 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "get_weapon_details":
                 RequireSession(args);
                 return ReadWeaponDetails(args);
+            case "get_attack_conditions":
+                RequireSession(args);
+                return ReadAttackConditions(args);
             case "acquire_control":
                 var requestedOwner = Text(args, "owner", 40);
                 if (lease.HasValue && ((string)args["lease"] != lease.Value.ToString() || requestedOwner != owner))
@@ -280,6 +283,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         switch (method)
         {
             case "pause":
+                if (RadioOwnsPause())
+                    throw new BridgeException("dialogue_choice_pending", "Finish the radio dialogue before pausing for a squad order.");
                 FinishStep("requested_pause");
                 speed.PauseGame();
                 return Snapshot();
@@ -295,6 +300,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "scavenge_building":
             case "return_to_stockroom":
             case "take_vehicle":
+            case "cancel_squad_order":
             case "choose_dialogue_option":
                 return ExecuteWorldCommand(method, args);
             case "advance":
@@ -339,6 +345,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             headquarters = Position(HqController.MainHeadquarter.Position),
             headquarters_id = StockroomId(HqController.MainHeadquarter),
             dialogue = ReadRadioDialogue(),
+            radio_paused = RadioOwnsPause(),
             squads = squads.Squads.Where(squad => squad != null && !squad.IsDestroying).Select(squad => new
             {
                 id = squad.Id.ToString(),
@@ -427,6 +434,8 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private object StartStep(JObject args)
     {
+        if (RadioOwnsPause())
+            throw new BridgeException("dialogue_choice_pending", "The radio dialogue controls gameplay pause.");
         if (step != null)
             throw new BridgeException("advance_busy", "Wait for the active advance to finish.");
         var allowBackground = (bool?)args["allow_background"] == true && Application.runInBackground;

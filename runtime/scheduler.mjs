@@ -56,6 +56,7 @@ export class Scheduler extends EventEmitter {
     this.stateService.off("state", this.onAssignmentReady);
     const text = `[IFZ Runtime 分工已就绪] 游戏会话 ${sessionId}。玩家保留小队 ${playerSquadId}，你负责小队 ${squadIds.join("、")}。\n` +
       "按 AI游戏协作规则.md 先用 runtime_health 和 world_snapshot 调查局势，地图细节按需分页查。只用 action_submit 给分配的小队下单。" +
+      "攻击前可用 get_attack_conditions 查射程、视线和冷却。自己的任务需要紧急中止时，用 action_force_stop 并说明原因。" +
       "收到任务 ID 后结束本轮，行动结果和敌情会另行唤醒你。玩家消息优先。";
     this.enqueue({ requestId: randomUUID(), text, mode: "queue", priority: 2, sessionId, attempts: 0 });
   }

@@ -10,6 +10,7 @@ using Gameplay.Units.Characters;
 using Gameplay.Units.Enemy;
 using Gameplay.Units.Equipment;
 using Gameplay.Units.Orders;
+using Gameplay.Units.Virtual;
 using Gameplay.Units.Player.Workers.WorkSystem;
 using MapEssentials;
 using Newtonsoft.Json.Linq;
@@ -42,7 +43,7 @@ public sealed partial class Plugin
                 throw new BridgeException("result_unknown", "Read game state before attempting another write.");
             return previous.Result;
         }
-        if (method != "choose_dialogue_option") RequirePausedWorld();
+        if (method != "choose_dialogue_option" && method != "cancel_squad_order") RequirePausedWorld();
         var command = new WorldCommand(method, input);
         worldCommands.Add(id, command);
         try
@@ -50,13 +51,14 @@ public sealed partial class Plugin
             command.Result = method switch
             {
                 "move_npc_group" => MoveNpcGroup(args),
-                "attack_group" => AttackGroup(args),
+                "attack_group" => AttackGroup(args, command),
                 "set_building_workers" => SetBuildingWorkers(args),
                 "equip_squad_member" => EquipMember(args),
                 "refill_squad_member_ammo" => RefillMemberAmmo(args),
-                "scavenge_building" => ScavengeBuilding(args),
-                "return_to_stockroom" => ReturnToStockroom(args),
-                "take_vehicle" => TakeVehicle(args),
+                "scavenge_building" => ScavengeBuilding(args, command),
+                "return_to_stockroom" => ReturnToStockroom(args, command),
+                "take_vehicle" => TakeVehicle(args, command),
+                "cancel_squad_order" => CancelSquadOrder(args),
                 "choose_dialogue_option" => ChooseRadioOption(args),
                 _ => throw new BridgeException("unknown_method", "Unknown world command.")
             };
@@ -185,25 +187,17 @@ public sealed partial class Plugin
             destination = Position(group.Movement.Destination) };
     }
 
-    private static object AttackGroup(JObject args)
+    private static object AttackGroup(JObject args, WorldCommand command)
     {
         var squad = FindSquad(Text(args, "squad_id", 64));
         var id = Text(args, "group_id", 64);
         var replace = (bool?)args["replace_orders"] == true;
-        if ((bool?)args["virtual"] == true)
-        {
-            var group = WorldContainer().Resolve<VirtualGroupsController>().Get(id);
-            if (group == null || group.IsEmpty() || !group.IsVisible() || !squad.EnemiesProvider.IsEnemy(group))
-                throw new BridgeException("invalid_attack_target", "Choose a visible hostile virtual group.");
-            return SubmitSquadOrder(squad, new AttackVirtualGroupOrder(group), replace, id);
-        }
-        var target = FindNpcGroup(id);
-        if (!target.IsVisible() || !target.CanBeAttacked() || !squad.EnemiesProvider.IsEnemy(target))
-            throw new BridgeException("invalid_attack_target", "Choose a visible hostile group that can be attacked.");
-        return SubmitSquadOrder(squad, new AttackGroupOrder(target), replace, id);
+        var target = FindAttackTarget(squad, id, (bool?)args["virtual"] == true);
+        Order order = target is VirtualGroup virtualGroup ? new AttackVirtualGroupOrder(virtualGroup) : new AttackGroupOrder((Group)target);
+        return SubmitSquadOrder(squad, order, replace, id, command);
     }
 
-    private static object ScavengeBuilding(JObject args)
+    private static object ScavengeBuilding(JObject args, WorldCommand command)
     {
         var squad = FindSquad(Text(args, "squad_id", 64));
         var building = FindBuilding(Text(args, "building_id", 64));
@@ -211,24 +205,48 @@ public sealed partial class Plugin
             !squad.CanGoToStructure(building))
             throw new BridgeException("scavenge_unavailable", "This squad cannot scavenge the selected building.");
         return SubmitSquadOrder(squad, new MoveToBuildingOrder(building),
-            (bool?)args["replace_orders"] == true, building.Id);
+            (bool?)args["replace_orders"] == true, building.Id, command);
     }
 
-    private static object SubmitSquadOrder(Group squad, Order order, bool replace, string targetId)
+    private static object SubmitSquadOrder(Group squad, Order order, bool replace, string targetId, WorldCommand command)
     {
-        var accepted = TrySubmitSquadOrder(squad, order, replace);
+        var accepted = TrySubmitSquadOrder(squad, order, replace, command);
         return new { squad_id = squad.Id, target_id = targetId, order = order.GetType().Name,
             state = accepted ? "accepted" : "rejected" };
     }
 
-    private static bool TrySubmitSquadOrder(Group squad, Order order, bool replace)
+    private static bool TrySubmitSquadOrder(Group squad, Order order, bool replace, WorldCommand command)
     {
+        command.NativeOrder = order;
         squad.OrdersHandlers.GiveOrder(order, clearOrders: replace);
         var queue = squad.OrdersHandlers.OrdersQueue;
         var accepted = ReferenceEquals(queue.CurrentOrder, order) || queue.Orders.Contains(order);
         if (!accepted)
             order.Dispose();
         return accepted;
+    }
+
+    private object CancelSquadOrder(JObject args)
+    {
+        var squad = FindSquad(Text(args, "squad_id", 64));
+        var id = Id(args, "order_id");
+        moves.TryGetValue(id, out var move);
+        worldCommands.TryGetValue(id, out var command);
+        var order = (Order)move?.NativeOrder ?? command?.NativeOrder;
+        if (order == null || !ReferenceEquals(order.Group, squad))
+            throw new BridgeException("order_not_found", "No tracked order with that ID for this squad.");
+
+        var queue = squad.OrdersHandlers.OrdersQueue;
+        if (!ReferenceEquals(queue.CurrentOrder, order) && !queue.Orders.Contains(order))
+            throw new BridgeException("order_not_active", "The tracked order already ended or was replaced.");
+
+        // End only the recorded order. The player may have added other orders since submission.
+        queue.RemoveFromQueue(order);
+        if (move != null) move.State = "canceled";
+        queue.UpdatePath();
+        return new { squad_id = squad.Id, order_id = id, state = "canceled",
+            active_order = queue.CurrentOrder?.GetType().Name,
+            queued_orders = queue.Orders.Select(item => item.GetType().Name).ToArray() };
     }
 
     private static ResourcesContainer EquipmentSource(Group squad, JObject args) =>
@@ -277,6 +295,7 @@ public sealed partial class Plugin
         public readonly string Method;
         public readonly JObject Input;
         public object Result;
+        public Order NativeOrder;
 
         public WorldCommand(string method, JObject input)
         {

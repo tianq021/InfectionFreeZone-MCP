@@ -12,6 +12,7 @@ import { ExecService } from "../exec-service.mjs";
 import { StateService } from "../state-service.mjs";
 import { createHub } from "../hub.mjs";
 import { Scheduler } from "../scheduler.mjs";
+import { registerEnemyTools } from "../../tools-extra3.mjs";
 import { FakeBridge } from "./fake-bridge.mjs";
 
 const token = randomBytes(32).toString("hex");
@@ -34,6 +35,8 @@ function action(sessionId, overrides = {}) {
 class ActionBridge extends FakeBridge {
   writes = [];
   orders = new Map();
+  stops = new Map();
+  loseNextStopReply = false;
 
   async call(method, args) {
     if (["status", "get_state", "get_world_data"].includes(method)) return super.call(method, args);
@@ -56,6 +59,19 @@ class ActionBridge extends FakeBridge {
         this.orders.set(args.request_id, { order_id: args.request_id, state: "moving", terminal: false });
         return { ok: true, order_id: args.request_id, state: "accepted", terminal: false };
       case "get_order": return { ok: true, ...this.orders.get(args.order_id) };
+      case "cancel_squad_order": {
+        if (this.stops.has(args.request_id)) return this.stops.get(args.request_id);
+        const order = this.orders.get(args.order_id);
+        if (!order || order.terminal) return { ok: false, code: "order_not_active" };
+        Object.assign(order, { state: "canceled", terminal: true });
+        const result = { ok: true, order_id: args.order_id, state: "canceled", queued_orders: [] };
+        this.stops.set(args.request_id, result);
+        if (this.loseNextStopReply) {
+          this.loseNextStopReply = false;
+          throw Object.assign(new Error("reply lost"), { code: "pipe_timeout" });
+        }
+        return result;
+      }
       default: throw new Error(`Unexpected bridge method ${method}`);
     }
   }
@@ -162,7 +178,7 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
   for (const name of [
     "get_map_buildings", "get_navigation_point", "get_order", "get_state",
     "get_world_data", "status", "get_weather", "observe", "get_mission_plan", "get_active_dialogue",
-    "get_squad_experience", "get_weapon_details",
+    "get_squad_experience", "get_weapon_details", "get_attack_conditions",
   ]) {
     assert.ok(names.has(name), `Missing read tool: ${name}`);
   }
@@ -170,7 +186,7 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
     "acquire_control", "release_control", "pause", "advance", "hud_message",
     "move_squad", "move_npc_group", "attack_group", "scavenge_building",
     "return_to_stockroom", "take_vehicle", "set_stockpile_amount", "set_building_workers",
-    "equip_squad_member", "refill_squad_member_ammo", "export_snapshot", "choose_dialogue_option",
+    "equip_squad_member", "refill_squad_member_ammo", "export_snapshot", "choose_dialogue_option", "cancel_squad_order",
   ]) {
     assert.ok(!names.has(name), `Unexpected write tool: ${name}`);
   }
@@ -180,6 +196,87 @@ test("DSH 直读模式保留查询工具并隐藏写入工具", async (t) => {
     assert.deepEqual(schema.required, ["session_id"]);
     assert.equal(schema.properties[filter].type, "string");
   }
+  const conditions = tools.find(({ name }) => name === "get_attack_conditions").inputSchema;
+  assert.deepEqual(conditions.required, ["session_id", "squad_id", "group_id"]);
+});
+
+test("强制终止已提交的订单，回执丢失时复用请求 ID，并发送一次提醒", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t);
+  const hub = createHub({ stateService: service, executor, port: 0, token });
+  const port = await hub.listen();
+  t.after(() => hub.close());
+  const client = new Client({ name: "stop-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(new StdioClientTransport({
+    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
+    env: { IFZ_RUNTIME_PORT: String(port), IFZ_RUNTIME_TOKEN: token },
+  }));
+  const input = action(sessionId);
+  executor.submit(input);
+  await until(() => executor.get(input.requestId), ({ state }) => state === "watching");
+  assert.throws(() => executor.cancel(input.requestId), { code: "order_already_submitted" });
+  const reason = "敌群逼近，需要撤退";
+  const unauthorized = await fetch(`http://127.0.0.1:${port}/actions/${input.requestId}/stop`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reason }),
+  });
+  assert.equal(unauthorized.status, 401);
+  bridge.baseState.time.paused = true;
+  bridge.loseNextStopReply = true;
+  bridge.writes.length = 0;
+  const callStop = () => client.callTool({ name: "action_force_stop", arguments: { taskId: input.requestId, reason } });
+  const results = await Promise.all([callStop(), callStop()]);
+  assert.ok(results.every((result) => result.structuredContent.task.state === "canceled"));
+  const stops = bridge.writes.filter(({ method }) => method === "cancel_squad_order");
+  assert.equal(stops.length, 2);
+  assert.equal(stops[0].args.request_id, stops[1].args.request_id);
+  assert.equal(stops[0].args.order_id, input.requestId);
+  assert.equal(bridge.writes.filter(({ method }) => method === "hud_message").length, 1);
+  assert.ok(!bridge.writes.some(({ method }) => method === "pause" || method === "advance"));
+  assert.equal(bridge.baseState.time.paused, true);
+  const { events } = service.getEvents({ types: ["action_finished"] });
+  assert.deepEqual(events.map(({ data }) => [data.state, data.reason]), [["canceled", reason]]);
+});
+
+test("已被玩家替换的原生订单不会返回取消成功或发送提醒", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t);
+  const input = action(sessionId);
+  executor.submit(input);
+  await until(() => executor.get(input.requestId), ({ state }) => state === "watching");
+  bridge.orders.delete(input.requestId);
+  const squad = bridge.world.squads.find(({ id }) => id === input.squadId);
+  squad.active_order = "MoveToClickableOrder";
+  bridge.writes.length = 0;
+  await assert.rejects(executor.forceStop(input.requestId, { reason: "撤退" }), { code: "order_not_active" });
+  assert.equal(squad.active_order, "MoveToClickableOrder");
+  assert.equal(service.getEvents({ types: ["action_finished"] }).events.length, 0);
+  assert.ok(!bridge.writes.some(({ method }) => method === "hud_message"));
+});
+
+test("战力评估读取真实队员和开火条件，拒绝已脱离视野的敌群", async () => {
+  const bridge = new FakeBridge();
+  const member = bridge.world.squads[1].members[0];
+  bridge.world.squads[1].members = [{ ...member, hp: 90, max_hp: 120 }];
+  let estimate;
+  let conditionCalls = 0;
+  registerEnemyTools({
+    registerLocal: (name, _description, _schema, handler) => { if (name === "get_combat_estimate") estimate = handler; },
+    request: (method, args) => {
+      if (method === "get_state") return { ...bridge.getState(), ok: true };
+      if (method !== "get_attack_conditions") return bridge.call(method, args);
+      conditionCalls++;
+      return { ok: true, mode: "settlement", paused: false,
+        members: [{ in_range: true, can_engage_from_position: false, can_attack_now: false }] };
+    },
+  });
+  const args = { squad_ids: ["835"], group_id: "g1" };
+  const result = await estimate(args);
+  assert.equal(result.ok, true);
+  assert.equal(result.squads.hpRatio, 0.75);
+  assert.deepEqual(result.squads.detail[0].attack, { inRange: 1, canEngage: 0, canAttackNow: 0 });
+  assert.match(result.advice, /无法交火/);
+  bridge.world.groups.find(({ id }) => id === "g1").visible = false;
+  assert.equal((await estimate(args)).code, "invalid_attack_target");
+  assert.equal(conditionCalls, 1);
 });
 
 test("浮窗消息越过等待中的游戏通知，独立接收读入回执、文本流和订单结果", async (t) => {
@@ -276,11 +373,65 @@ test("取消排队任务与未知回执都不会导致重复下单", async (t) =
   assert.equal(executor.assignment().pendingVerification[0].taskId, lost.requestId);
   assert.equal(calls, 1);
   const squad = bridge.world.squads.find(({ id }) => id === "835");
+  const hub = createHub({ stateService: executor.stateService, executor, port: 0, token });
+  const port = await hub.listen();
+  t.after(() => hub.close());
+  const client = new Client({ name: "resolve-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(new StdioClientTransport({
+    command: process.execPath, args: [fileURLToPath(new URL("../runtime-mcp.mjs", import.meta.url))],
+    env: { IFZ_RUNTIME_PORT: String(port), IFZ_RUNTIME_TOKEN: token },
+  }));
+  const resolve = async () => (await client.callTool({
+    name: "action_resolve", arguments: { taskId: lost.requestId },
+  })).structuredContent;
   squad.active_order = "MoveOrder";
-  await assert.rejects(executor.resolve(lost.requestId), { code: "squad_busy" });
+  assert.equal((await resolve()).code, "squad_busy");
   squad.active_order = null;
-  assert.equal((await executor.resolve(lost.requestId)).held, false);
+  assert.equal((await resolve()).task.held, false);
   assert.equal(executor.submit(lost).finishedAt > 0, true);
+});
+
+test("待确认任务保留小队占用，其他小队仍可接单", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t, async (_call, { onSubmit }) => {
+    onSubmit();
+    return { errors: [{ code: "pipe_timeout", message: "Lost order reply" }] };
+  });
+  const ids = Array.from({ length: 64 }, (_, i) => String(1000 + i));
+  for (const id of ids) {
+    executor.squads.add(id);
+    bridge.world.squads.push({ ...bridge.world.squads[1], id });
+  }
+  await service.pollOnce();
+  for (const squadId of ids) {
+    const pending = once(service, "event");
+    executor.submit(action(sessionId, { squadId }));
+    const [event] = await pending;
+    assert.equal(event.type, "action_verify_required");
+  }
+  assert.equal(executor.assignment().pendingVerification.length, 64);
+  assert.throws(() => executor.submit(action(sessionId, { squadId: ids[0] })), { code: "action_busy" });
+  assert.equal(executor.submit(action(sessionId)).state, "queued");
+});
+
+test("无线电接管暂停时拒绝新订单，准备中的订单也不会恢复时间", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t);
+  bridge.baseState.dialogue = { choice_id: randomUUID() };
+  await service.pollOnce();
+  assert.throws(() => executor.submit(action(sessionId)), { code: "dialogue_choice_pending" });
+  bridge.baseState.dialogue = null;
+  await service.pollOnce();
+  const call = bridge.call.bind(bridge);
+  bridge.call = (method, args) => {
+    if (method === "pause") bridge.baseState.radio_paused = true;
+    return call(method, args);
+  };
+  const input = action(sessionId);
+  executor.submit(input);
+  const finished = await until(() => executor.get(input.requestId), ({ state }) => state === "failed");
+  assert.equal(finished.error.code, "dialogue_choice_pending");
+  assert.equal(bridge.baseState.time.paused, true);
+  assert.ok(!bridge.writes.some(({ method }) => method === "move_squad" || method === "advance"));
 });
 
 test("长期运行可完成 5000 条动作和 2000 条消息，并回放最近的请求", async (t) => {
@@ -359,6 +510,57 @@ test("搜刮、攻击和回仓以目标状态或卸货变化确认完成", async
     const done = await until(() => executor.get(input.requestId), ({ state }) => state === "succeeded");
     assert.deepEqual(done.evidence, entry.evidence);
   }
+});
+
+test("实体和虚拟敌群从原生名册移除时确认攻击完成，脱离视野不算移除", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t, async (_call, options) => {
+    await options.validate(bridge.getState(), bridge.world.squads[1]);
+    options.onSubmit();
+    return { ok: true, receipt: { state: "accepted", order: "AttackGroupOrder" } };
+  });
+  const target = bridge.world.groups.find(({ id }) => id === "g1");
+  bridge.world.virtualGroups = [{ ...target, id: "vg1" }];
+  for (const [collection, groupId, virtual] of [["groups", "g1", false], ["virtualGroups", "vg1", true]]) {
+    const input = action(sessionId, { command: "attack_group", params: { group_id: groupId, virtual } });
+    executor.submit(input);
+    await until(() => executor.get(input.requestId), ({ state }) => state === "watching");
+    bridge.world[collection].find(({ id }) => id === groupId).visible = false;
+    await service.pollOnce();
+    assert.equal(executor.get(input.requestId).state, "watching");
+    service.state = { ...service.state, [collection]: [] };
+    await executor.inspect();
+    assert.equal(executor.get(input.requestId).state, "watching");
+    bridge.world[collection] = bridge.world[collection].filter(({ id }) => id !== groupId);
+    await service.pollOnce();
+    const done = await until(() => executor.get(input.requestId), ({ state }) => state === "succeeded");
+    assert.deepEqual(done.evidence, { groupId, before: 8, remaining: 0, targetRemoved: true });
+    assert.equal(done.held, false);
+  }
+});
+
+test("搜刮途中保留占用，订单结束后把取得的物资记录为部分完成", async (t) => {
+  const { sessionId, bridge, service, executor } = await setupExecutor(t, async (_call, options) => {
+    await options.validate(bridge.getState(), bridge.world.squads[1]);
+    options.onSubmit();
+    return { ok: true, receipt: { state: "accepted", order: "MoveToBuildingOrder" },
+      after: { squad: { order: "MoveToBuildingOrder" } } };
+  });
+  const building = bridge.world.buildings[1];
+  building.scavenge = { done: false, remaining_quantity: 8 };
+  const squad = bridge.world.squads[1];
+  const input = action(sessionId, { command: "scavenge_building", params: { building_id: building.id } });
+  executor.submit(input);
+  await until(() => executor.get(input.requestId), ({ state }) => state === "watching");
+  squad.active_order = "MoveToBuildingOrder";
+  squad.cargo = { res_cans: 3 };
+  building.scavenge.remaining_quantity = 5;
+  await service.pollOnce();
+  assert.equal(executor.get(input.requestId).state, "watching");
+  squad.active_order = null;
+  await service.pollOnce();
+  const done = await until(() => executor.get(input.requestId), ({ state }) => state === "succeeded");
+  assert.equal(done.evidence.partial, true);
+  assert.equal(done.evidence.remaining, 5);
 });
 
 test("本地写接口要求令牌并限制突发请求", async (t) => {

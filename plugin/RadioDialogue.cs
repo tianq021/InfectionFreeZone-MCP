@@ -26,12 +26,16 @@ public sealed partial class Plugin
         AccessTools.FieldRefAccess<DialogueOption, bool>("_clickable");
     private static readonly AccessTools.FieldRef<TextPrinter, TextMeshProUGUI> RadioText =
         AccessTools.FieldRefAccess<TextPrinter, TextMeshProUGUI>("_textMesh");
+    private static readonly AccessTools.FieldRef<TransmissionManager, bool> RadioPause =
+        AccessTools.FieldRefAccess<TransmissionManager, bool>("_isPausingGameplayTransmissionStarted");
 
     private Dialogue radioDialogue;
     private DialogueOption[] radioOptions = Array.Empty<DialogueOption>();
     private Guid radioChoiceId;
     private bool radioChoiceConsumed;
     private RadioSelection lastRadioSelection;
+
+    private static bool RadioOwnsPause() => radio != null && RadioPause(radio);
 
     private static void CaptureRadio(TransmissionManager __instance, TransmissionCanvas __0, DialogueManager __1)
     {

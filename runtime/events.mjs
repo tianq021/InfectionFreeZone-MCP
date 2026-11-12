@@ -40,6 +40,7 @@ export function meaningfulHash(state) {
     focused: state.focused,
     headquarters: state.headquarters,
     dialogue: state.dialogue ?? null,
+    radioPaused: state.radioPaused,
     squads: state.squads ?? [],
     vehicles: state.vehicles ?? [],
     groups: state.groups ?? [],
@@ -115,9 +116,9 @@ export function diffState(prev, next) {
   }
   const headerChanges = deepChanges(
     { ready: prev.ready, paused: prev.time?.paused, focused: prev.focused, sessionId: prev.sessionId,
-      day: prev.time?.day, sunset: prev.time?.sunset, headquarters: prev.headquarters },
+      day: prev.time?.day, sunset: prev.time?.sunset, headquarters: prev.headquarters, radioPaused: prev.radioPaused },
     { ready: next.ready, paused: next.time?.paused, focused: next.focused, sessionId: next.sessionId,
-      day: next.time?.day, sunset: next.time?.sunset, headquarters: next.headquarters },
+      day: next.time?.day, sunset: next.time?.sunset, headquarters: next.headquarters, radioPaused: next.radioPaused },
     { maxDepth: 2 },
   );
   if (headerChanges.length) delta.header = headerChanges;

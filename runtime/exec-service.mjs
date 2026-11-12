@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { executeCoopOrder, readState, readWorld } from "../coop.mjs";
 
@@ -22,7 +23,9 @@ export const actionInput = {
   notice: z.string().trim().min(1).max(240),
   priority: z.number().int().min(0).max(10).optional(),
 };
+export const stopActionInput = { reason: z.string().trim().min(1).max(240) };
 const actionSchema = z.strictObject(actionInput);
+const stopActionSchema = z.strictObject(stopActionInput);
 const transportErrors = new Set(["bridge_offline", "bridge_closed", "bridge_protocol", "pipe_timeout",
   "transport_error", "game_error", "result_unknown", "EPERM", "ECONNRESET", "EPIPE"]);
 const watchDurations = { move_squad: 90000, scavenge_building: 600000, attack_group: 300000,
@@ -33,6 +36,7 @@ const historyLimit = 20000;
 const fail = (status, code, message) => Object.assign(new Error(message), { status, code });
 const summary = (task) => structuredClone(task.view);
 const totalCargo = (cargo) => Object.values(cargo ?? {}).reduce((sum, amount) => sum + amount, 0);
+const radioPending = (state) => Boolean(state?.radioPaused || state?.dialogue?.choice_id);
 
 export class ExecService {
   constructor({ pipe, stateService, sessionId, playerSquadId, squadIds, execute = executeCoopOrder, watchMs }) {
@@ -91,7 +95,10 @@ export class ExecService {
       throw fail(403, "squad_not_assigned", "The squad is outside the configured AI assignment.");
     if (!this.assignment().ready)
       throw fail(409, "squad_changed", "The squad roster no longer matches the assignment.");
-    if (this.tasks.size >= 64 || this.queue.length >= 32) throw fail(429, "action_limit", "The executor has too many active tasks.");
+    if (radioPending(this.stateService.state))
+      throw fail(409, "dialogue_choice_pending", "Complete the radio dialogue before submitting a squad order.");
+    const activeCount = [...this.tasks.values()].filter(({ view }) => !view.held).length;
+    if (activeCount >= 64 || this.queue.length >= 32) throw fail(429, "action_limit", "The executor has too many active tasks.");
 
     const building = action.params.building_id;
     for (const task of this.tasks.values()) {
@@ -144,14 +151,80 @@ export class ExecService {
     return summary(task);
   }
 
+  async forceStop(id, input) {
+    const parsed = stopActionSchema.safeParse(input);
+    if (!parsed.success) throw fail(400, "invalid_stop_reason", parsed.error.issues[0].message);
+    const task = this.lookup(id);
+    if (!task) throw fail(404, "action_not_found", "Unknown task ID.");
+    if (task.view.finishedAt) return summary(task);
+    if (this.stopped) throw fail(503, "executor_stopped", "The executor is stopping.");
+    if (task.stopOperation) return task.stopOperation;
+    task.view.stopReason = parsed.data.reason;
+    task.stopOperation = this.stopAction(task);
+    try {
+      return await task.stopOperation;
+    } finally {
+      task.stopOperation = null;
+      if (!task.view.finishedAt) delete task.view.stopReason;
+    }
+  }
+
+  async stopAction(task) {
+    if (task.view.state === "queued" || task.view.state === "preparing") this.cancel(task.view.taskId);
+    if (task.view.finishedAt) return summary(task);
+    while (this.active) await this.active.catch(() => {});
+    if (task.view.finishedAt) return summary(task);
+    if (this.stopped) throw fail(503, "executor_stopped", "The executor is stopping.");
+    const active = this.stopNativeOrder(task);
+    this.active = active;
+    try {
+      return await active;
+    } finally {
+      this.active = null;
+      if (!this.stopped && this.queue.length) setImmediate(() => this.drain());
+    }
+  }
+
+  async stopNativeOrder(task) {
+    const { sessionId, squadId, requestId } = task.input;
+    await readState(this.call, sessionId).catch((error) => {
+      throw fail(error.status ?? 409, error.code, error.message);
+    });
+    const { lease } = await this.call("acquire_control", { owner: "IFZ Runtime" });
+    try {
+      task.stopRequestId ??= randomUUID();
+      const args = { session_id: sessionId, lease, squad_id: squadId, order_id: requestId, request_id: task.stopRequestId };
+      try {
+        task.view.stopReceipt = await this.call("cancel_squad_order", args).catch((error) => {
+          if (!transportErrors.has(error.code)) throw error;
+          return this.call("cancel_squad_order", args);
+        });
+      } catch (error) {
+        if (["order_not_active", "order_not_found"].includes(error.code))
+          throw fail(409, error.code, error.message);
+        throw fail(error.status ?? 502, error.code, error.message);
+      }
+      if (task.view.stopReceipt.state !== "canceled")
+        throw fail(502, "stop_unconfirmed", "The game did not confirm the cancellation.");
+      this.finish(task, "canceled");
+      await this.call("hud_message", { text: `小队 ${squadId} 已终止行动。${task.view.stopReason}`, seconds: 30 }).catch(() => {});
+      return summary(task);
+    } finally {
+      await this.call("release_control", { lease }).catch(() => {});
+    }
+  }
+
   async resolve(id) {
     const task = this.lookup(id);
     if (!task) throw fail(404, "action_not_found", "Unknown task ID.");
     if (task.view.finishedAt) return summary(task);
+    if (task.stopOperation) throw fail(409, "stop_in_progress", "Wait for the cancellation receipt.");
     if (task.view.state !== "unknown")
       throw fail(409, "action_not_held", "Only an unresolved action can be released.");
     const current = await readState(this.call, task.input.sessionId);
     const squads = await readWorld(this.call, current, "squads");
+    if (task.view.finishedAt) return summary(task);
+    if (task.stopOperation) throw fail(409, "stop_in_progress", "Wait for the cancellation receipt.");
     const squad = squads.find(({ id }) => String(id) === task.input.squadId);
     if (squad?.active_order || squad?.queued_orders?.length)
       throw fail(409, "squad_busy", "Wait until the squad has no active or queued game orders.");
@@ -170,7 +243,9 @@ export class ExecService {
       type: "action_finished", severity: state === "unknown" ? "warn" : "info",
       at: task.view.finishedAt,
       data: { taskId: task.view.taskId, sessionId: task.input.sessionId, squadId: task.input.squadId,
-        command: task.input.command, state, code: error?.code },
+        command: task.input.command, state, code: error?.code,
+        ...(state === "canceled" && task.view.stopReason && { reason: task.view.stopReason,
+          remainingOrders: Boolean(task.view.stopReceipt?.active_order || task.view.stopReceipt?.queued_orders?.length) }) },
     });
   }
 
@@ -188,7 +263,7 @@ export class ExecService {
   async drain() {
     if (this.active || this.stopped || !this.queue.length) return;
     const state = this.stateService.state;
-    if (state?.sessionId === this.sessionId && (!state.focused || state.time?.paused)) return;
+    if (state?.sessionId === this.sessionId && (!state.focused || state.time?.paused || radioPending(state))) return;
     const task = this.queue.shift();
     clearTimeout(task.timer);
     task.view.state = "preparing";
@@ -227,6 +302,11 @@ export class ExecService {
           if (action.command === "attack_group") {
             const groups = await readWorld(this.call, paused, action.params.virtual ? "virtual_groups" : "groups");
             task.targetCount = groups.find(({ id }) => String(id) === action.params.group_id)?.member_count;
+          }
+          if (action.command === "scavenge_building") {
+            const building = await this.readScavengeBuilding(action);
+            task.remainingBefore = building?.scavenge?.remaining_quantity;
+            task.cargoBefore = totalCargo(current.cargo);
           }
           if (action.command === "return_to_stockroom") {
             const vehicle = current.vehicle_id && (await readWorld(this.call, paused, "vehicles"))
@@ -271,6 +351,7 @@ export class ExecService {
       const state = this.stateService.state;
       if (!state || !this.stateService.ready || !this.stateService.online) return;
       for (const task of this.tasks.values()) {
+        if (task.stopOperation) continue;
         if (task.view.state !== "watching" && task.view.state !== "unknown") continue;
         const { input, view } = task;
         if (input.sessionId !== state.sessionId) {
@@ -280,9 +361,10 @@ export class ExecService {
         if (input.command === "move_squad") {
           try {
             const order = await this.call("get_order", { session_id: input.sessionId, order_id: input.requestId });
-            if (view.finishedAt) continue;
+            if (view.finishedAt || task.stopOperation) continue;
             view.order = order;
-            if (order.terminal) this.finish(task, order.state === "arrived" ? "succeeded" : "failed",
+            if (order.state === "canceled") this.finish(task, "canceled");
+            else if (order.terminal) this.finish(task, order.state === "arrived" ? "succeeded" : "failed",
               order.state === "arrived" ? undefined : { code: order.state, message: "The move ended before arrival." });
           } catch {
             // A read may fail temporarily. The watch deadline bounds recovery.
@@ -299,7 +381,8 @@ export class ExecService {
           this.finish(task, "failed", { code: "squad_lost", message: "The assigned squad is no longer present." });
         } else if (view.receipt) {
           const evidence = await this.verify(task, state, squad);
-          if (evidence && !view.finishedAt && !this.stopped) {
+          if (evidence && !view.finishedAt && !task.stopOperation && !this.stopped &&
+              this.stateService.state?.sessionId === input.sessionId) {
             view.evidence = evidence;
             this.finish(task, "succeeded");
           }
@@ -310,24 +393,48 @@ export class ExecService {
     }
   }
 
+  async readScavengeBuilding(input) {
+    try {
+      return await this.call("get_building_info", {
+        session_id: input.sessionId, building_id: input.params.building_id,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   async verify(task, state, squad) {
     const { input, view } = task;
     if (input.command === "scavenge_building") {
-      try {
-        const building = await this.call("get_building_info", {
-          session_id: input.sessionId, building_id: input.params.building_id,
-        });
-        if (building.scavenged === true && this.stateService.state?.sessionId === input.sessionId)
-          return { buildingId: input.params.building_id, scavenged: true };
-      } catch {
-        // Recheck later if the bridge or target is unavailable.
+      const building = await this.readScavengeBuilding(input);
+      if (building?.scavenged === true || building?.scavenge?.done === true)
+        return { buildingId: input.params.building_id, scavenged: true };
+      if (task.seenOrder && !squad.active_order && !squad.queued_orders?.length) {
+        const remaining = building?.scavenge?.remaining_quantity;
+        const cargo = totalCargo(squad.cargo);
+        if (remaining < task.remainingBefore || cargo > task.cargoBefore)
+          return { buildingId: input.params.building_id, partial: true, remainingBefore: task.remainingBefore,
+            remaining, cargoBefore: task.cargoBefore, cargo };
       }
     }
     if (input.command === "attack_group") {
+      if (!(task.targetCount > 0)) return;
+      const groupId = input.params.group_id;
+      const category = input.params.virtual ? "virtual_groups" : "groups";
       const groups = input.params.virtual ? state.virtualGroups : state.groups;
-      const target = groups?.find(({ id }) => String(id) === input.params.group_id);
+      const target = groups?.find(({ id }) => String(id) === groupId);
       if (target?.visible && target.member_count < task.targetCount)
-        return { groupId: input.params.group_id, before: task.targetCount, remaining: target.member_count };
+        return { groupId, before: task.targetCount, remaining: target.member_count };
+      if (!target) {
+        // A paginated cache can omit a live group. Recheck the full native roster.
+        try {
+          const roster = await readWorld(this.call, { session_id: input.sessionId }, category);
+          if (!roster.some(({ id }) => String(id) === groupId))
+            return { groupId, before: task.targetCount, remaining: 0, targetRemoved: true };
+        } catch {
+          // An unreadable roster provides no evidence of removal.
+        }
+      }
     }
     if (input.command === "return_to_stockroom") {
       const room = state.stockrooms?.find(({ id }) => String(id) === view.receipt.stockroom_id);
@@ -347,7 +454,7 @@ export class ExecService {
     this.stateService.off("state", this.onState);
     for (const task of this.queue.splice(0)) this.finish(task, "canceled");
     for (const task of this.tasks.values()) if (task.view.state === "preparing") task.abort.abort();
-    await this.active;
+    await this.active?.catch(() => {});
     for (const task of this.tasks.values()) if (task.view.state === "watching") this.hold(task,
       { code: "executor_stopped", message: "The game may still be executing the order." });
   }

@@ -129,6 +129,12 @@ tool("get_weapon_details", "Read the game's weapon catalog, including base settl
   session_id: session,
   weapon_id: entityId.optional(),
 });
+tool("get_attack_conditions", "For one squad and a visible hostile group, read each member's current distance, effective range, line of sight, ammo and cooldown. Virtual combat has no local firing checks.", {
+  session_id: session,
+  squad_id: z.string().min(1).max(64),
+  group_id: z.string().min(1).max(64),
+  virtual: z.boolean().optional(),
+});
 const coordinate = z.number().finite();
 const point = { x: coordinate, z: coordinate };
 registerMapQuery(tool, worldPage);
@@ -167,6 +173,12 @@ writeTool("move_squad", "Queue a native move 6–100 world units away. Set repla
   squad_id: entityId,
   ...point,
   replace_orders: replaceOrders,
+});
+writeTool("cancel_squad_order", "Cancel a specific tracked native squad order by its original request ID. Preserves other queued orders and the current game speed. Reuse the cancellation request_id on retry.", {
+  ...control,
+  squad_id: z.string().min(1).max(64),
+  order_id: orderId,
+  request_id: orderId,
 });
 writeTool("move_npc_group", "Submit a native movement target for a nonplayer group. NPC AI may choose another target after simulation resumes.", {
   ...worldCommand,

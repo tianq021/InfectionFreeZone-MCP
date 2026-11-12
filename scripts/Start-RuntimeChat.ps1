@@ -106,7 +106,9 @@ function Show-ChatFrame($frame) {
                 'canceled' { '已取消' }
                 default { '结果待确认' }
             }
-            Add-ChatLine '执行器' "小队 $($frame.squadId) · $($frame.command) · $outcome"
+            $reason = if ($frame.reason) { " · $($frame.reason)" } else { '' }
+            $remaining = if ($frame.remainingOrders) { ' · 小队仍有其他订单' } else { '' }
+            Add-ChatLine '执行器' "小队 $($frame.squadId) · $($frame.command) · $outcome$reason$remaining"
         }
     }
 }

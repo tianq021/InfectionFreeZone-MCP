@@ -72,7 +72,7 @@ public sealed partial class Plugin
         position = Position(structure.Position)
     };
 
-    private static object ReturnToStockroom(JObject args)
+    private static object ReturnToStockroom(JObject args, WorldCommand command)
     {
         var squad = FindSquad(Text(args, "squad_id", 64));
         var vehicle = squad.VehicleHandler?.Vehicle;
@@ -98,7 +98,7 @@ public sealed partial class Plugin
         Order order = target is Building building
             ? new MoveToBuildingOrder(building)
             : new MoveToConvoyStructureOrder((ConvoyStructure)target);
-        var accepted = TrySubmitSquadOrder(squad, order, replace);
+        var accepted = TrySubmitSquadOrder(squad, order, replace, command);
         return new
         {
             squad_id = squad.Id,
@@ -110,7 +110,7 @@ public sealed partial class Plugin
         };
     }
 
-    private static object TakeVehicle(JObject args)
+    private static object TakeVehicle(JObject args, WorldCommand command)
     {
         var squad = FindSquad(Text(args, "squad_id", 64));
         var vehicleId = Text(args, "vehicle_id", 64);
@@ -133,7 +133,7 @@ public sealed partial class Plugin
             throw new BridgeException("squad_busy", "Wait for the current order or explicitly replace it.");
 
         var order = new TakeVehicleOrder(vehicle);
-        var accepted = TrySubmitSquadOrder(squad, order, replace);
+        var accepted = TrySubmitSquadOrder(squad, order, replace, command);
         return new
         {
             squad_id = squad.Id,

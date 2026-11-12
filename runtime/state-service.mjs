@@ -305,6 +305,7 @@ export class StateService extends EventEmitter {
       focused: Boolean(stateReply.focused),
       time: stateReply.time ?? null,
       dialogue: stateReply.dialogue ?? null,
+      radioPaused: Boolean(stateReply.radio_paused),
       headquarters: stateReply.headquarters ?? null,
       game: {
         scene: stateReply.scene ?? stateReply.mode ?? null,

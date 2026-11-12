@@ -1,7 +1,7 @@
 # Infection Free Zone MCP · v0.2.2 (English)
 
 > A human–AI co-op MCP bridge for **Infection Free Zone** (Steam build `26104777`, Windows x64, Unity Mono).
-> A BepInEx plugin reads/writes the game on the Unity main thread; a Node.js server exposes **78 MCP tools** over stdio so DSH / Codex and other AI clients can observe the settlement, issue native orders and play in 1× sync with the human player.
+> A BepInEx plugin reads/writes the game on the Unity main thread; a Node.js server exposes **80 MCP tools** over stdio so DSH / Codex and other AI clients can observe the settlement, issue native orders and play in 1× sync with the human player.
 
 **Languages:** [简体中文](../../README.md) · **English** · [日本語](README.ja.md) · [Русский](README.ru.md)
 
@@ -17,9 +17,9 @@
 | Layer | Component | Notes |
 |---|---|---|
 | Game | Infection Free Zone (Steam `26104777`) | Saves in `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
-| Plugin | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 plugin, Harmony hooks, **43 bridge methods** |
+| Plugin | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 plugin, Harmony hooks, **45 bridge methods** |
 | Bridge | Named pipe `\\.\pipe\infection-free-zone-mcp-steam-v1` | ~16–20 ms per call |
-| Server | `server.mjs` | **78 MCP tools** (43 bridge + 1 weather + 34 composite) |
+| Server | `server.mjs` | **80 MCP tools** (45 bridge + 1 weather + 34 composite) |
 | Clients | DSH / Codex / `client.mjs` / in-game chat window / read-only watchers | AI plays alongside the human |
 
 **Design principles**
@@ -42,7 +42,7 @@ node client.mjs --steam get_mission_plan '{}'
 node client.mjs --steam get_enemy_report '{}'
 node client.mjs --steam find_buildings_by_poi '{"poi":["Gun","Fuel"]}'
 node client.mjs --steam get_vehicle_map '{}'
-npm run tools:list                         # 78 tools, no game required
+npm run tools:list                         # 80 tools, no game required
 ```
 
 `client.mjs` accepts inline JSON or `@path/to/args.json` (recommended under PowerShell 5.1).
@@ -50,11 +50,13 @@ Use `--lang zh-CN | ja | ru` (or `IFZ_MCP_LANG`) to localize MCP tool descriptio
 
 ---
 
-## 3. Tool catalog (78)
+## 3. Tool catalog (80)
 
 `get_active_dialogue` reads the visible radio conversation, choices and in-game effect hints. `choose_dialogue_option` submits a current reply. For observed follow-up lines and Runtime setup, see the [radio dialogue guide](../../runtime/README.md#无线电剧情选择).
 
 `get_squad_experience` reads each member’s activity XP, active skills and effective range with their current weapon. `get_weapon_details` reads the native weapon catalog, including base ranges, damage, cooldown and use restrictions.
+
+`get_attack_conditions` checks distance, line of sight, ammo and cooldown for each squad member against a visible hostile group. Use Runtime `action_force_stop` to cancel a tracked AI order and notify the player, or use `cancel_squad_order` in direct write mode.
 
 ### 3.1 Bridge · read-only (13)
 
@@ -124,8 +126,8 @@ Common error codes: `lease_required`, `control_busy`, `pause_required`, `speed_l
 ## 6. Repository layout
 
 ```text
-plugin/            C# BepInEx plugin (43 bridge methods)
-server.mjs         MCP server (78 tools)
+plugin/            C# BepInEx plugin (45 bridge methods)
+server.mjs         MCP server (80 tools)
 tools-extra*.mjs   composite tools (1–4 batches)
 weather.mjs        offline save weather parser
 client.mjs         CLI client (--steam, @args.json)

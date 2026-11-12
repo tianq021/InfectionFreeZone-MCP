@@ -46,6 +46,7 @@
 | `POST /actions` | 入队后返回 HTTP 202 和任务。请求含 `requestId`、`sessionId`、`squadId`、`command`、`params`、`notice` |
 | `GET /actions/<id>` | 读取任务状态、游戏回执和错误 |
 | `DELETE /actions/<id>` | 取消排队任务，或请求中止提交前的准备 |
+| `POST /actions/<id>/stop` | 传入 `reason` 强制终止该任务。游戏已接单时，用原生订单 ID 取消，并返回队列现状 |
 | `POST /actions/<id>/resolve` | 玩家核对游戏后释放待确认的任务。Runtime 会再次检查小队当前订单与队列 |
 | `POST /messages` | 将含 `requestId` 和 `text` 的用户消息优先投递给 DSH。设置 `interrupt: true` 时先中断当前回合。DSH 确认接收后返回 |
 | `GET /stream` | SSE 推送 DSH 助手片段、消息读入回执、回合边界、连接状态和订单结果 |
@@ -56,7 +57,9 @@
 
 写接口和浮窗事件流使用 `x-ifz-token`。启用动作或 DSH 时，Runtime 默认在 `%LOCALAPPDATA%\ifz-runtime\token` 生成令牌，同一账户下的 Runtime MCP 和浮窗会自动读取。可用 `IFZ_RUNTIME_TOKEN_FILE` 指定受当前用户保护的路径，或给各进程设置相同的 `IFZ_RUNTIME_TOKEN`。使用 `--require-token` 可同时保护查询接口。动作与消息接口分别限制为每 10 秒 20 和 10 次。
 
-MCP 工具对应 `runtime_health`、`world_snapshot`、`world_wait`、`events_poll`、`events_wait`、`action_submit`、`action_status` 和 `action_cancel`。地图和单位的直接查询仍可使用现有游戏 MCP。
+MCP 工具对应 `runtime_health`、`world_snapshot`、`world_wait`、`events_poll`、`events_wait`、`action_submit`、`action_status`、`action_cancel`、`action_force_stop` 和 `action_resolve`。核对待确认任务的游戏结果后，可用 `action_resolve` 释放占用。Runtime 会回读小队当前和排队订单，空闲后释放并保留原来的未知结果。
+
+攻击结束后，Runtime 会重新核对已消失的目标是否仍在原生名册里。搜刮若只取到部分物资，订单结束且小队空闲后，证据会标为 `partial: true`。待确认任务仍占用各自的小队和目标，其他小队可以继续接单。
 
 ## 启动
 
@@ -90,6 +93,8 @@ node runtime/runtime.mjs --steam --game-session $gameSession --dsh-session $dshS
 3. DSH 用 `action_submit` 下单，拿到任务 ID 后结束本轮。执行器独立提交原生订单并跟踪结果，调度器在行动结束或重要局势变化时唤醒 DSH。玩家消息可直接在 DSH 发送，或通过 `/messages` 优先引导下一步。打断 DSH 回合时，已入队的后台任务仍由执行器处理。`action_cancel` 可取消尚未提交给游戏的任务。
 4. 换档、缺少已分配的小队或桥接离线时，`assignment.ready` 会变为 `false`。恢复协作前先核对分工和仍在执行的游戏订单。
 
+紧急中止时传 `action_force_stop({ taskId, reason })`。原生取消成功后，HUD 和浮窗会显示原因。`stopReceipt` 会列出当前订单和排队订单，确认小队空闲后可以用 `action_submit` 下撤退订单。若玩家已替换该订单，工具返回 `order_not_active`。
+
 ### 无线电剧情选择
 
 安装本版编译的插件并进入聚落。Runtime 的 `--enable-actions` 同时允许无线电选择。只授权无线电时使用 `--enable-dialogue-choices`，可省略小队分工。绑定 DSH 会话后，`dialogue_options_available` 会在选项可点时唤醒模型。
@@ -99,6 +104,8 @@ node runtime/runtime.mjs --steam --game-session $gameSession --dsh-session $dshS
 3. 再次调用 `get_active_dialogue`。即使无线电面板已经关闭，也能在 `last_choice.observed_lines` 读取这次选择之后实际播放的台词。资源等实际变化可用现有状态工具核对。
 
 原生 MCP 的 `get_active_dialogue` 要求传入当前 `session_id`。原生写模式可用同名写工具，调用时传入写租约。无线电选择沿用游戏自身的暂停和恢复规则。普通系统确认框由玩家处理。
+
+无线电管理暂停或等待选择时，`action_submit` 会返回 `dialogue_choice_pending`。已入队的普通订单等待对话结束；准备中的协作订单遇到无线电接管暂停时不会主动推进时间。
 
 ### 游戏浮窗实时模式
 

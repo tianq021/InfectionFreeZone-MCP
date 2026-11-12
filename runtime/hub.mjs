@@ -71,8 +71,9 @@ export function createHub({ stateService, executor, scheduler, chooseDialogue, h
       const url = new URL(request.url ?? "/", origin);
       const actionId = /^\/actions\/([0-9a-f-]{36})$/i.exec(url.pathname)?.[1];
       const resolveId = /^\/actions\/([0-9a-f-]{36})\/resolve$/i.exec(url.pathname)?.[1];
+      const stopId = /^\/actions\/([0-9a-f-]{36})\/stop$/i.exec(url.pathname)?.[1];
       const writeRoute = (request.method === "POST" &&
-        (url.pathname === "/actions" || url.pathname === "/messages" || url.pathname === "/dialogue/choose" || resolveId)) ||
+        (url.pathname === "/actions" || url.pathname === "/messages" || url.pathname === "/dialogue/choose" || resolveId || stopId)) ||
         (request.method === "DELETE" && actionId);
       if (expected && (writeRoute || requireToken || url.pathname === "/stream")) {
         const provided = Buffer.from(request.headers["x-ifz-token"] ?? "");
@@ -95,6 +96,10 @@ export function createHub({ stateService, executor, scheduler, chooseDialogue, h
       if (request.method === "POST" && resolveId) {
         if (!executor) return send(response, 503, { ok: false, code: "executor_disabled" });
         return send(response, 200, { ok: true, task: await executor.resolve(resolveId) });
+      }
+      if (request.method === "POST" && stopId) {
+        if (!executor) return send(response, 503, { ok: false, code: "executor_disabled" });
+        return send(response, 200, { ok: true, task: await executor.forceStop(stopId, await readJson(request)) });
       }
       if (actionId && ["GET", "DELETE"].includes(request.method)) {
         if (!executor) return send(response, 503, { ok: false, code: "executor_disabled" });
@@ -120,7 +125,7 @@ export function createHub({ stateService, executor, scheduler, chooseDialogue, h
           service: "ifz-runtime",
           routes: ["/health", "/state?since=<v>&cats=squads,groups", "/state/wait?since=<v>&timeoutMs=5000",
             "/events?since=<cursor>&types=enemy_approach", "/events/wait?since=<cursor>&timeoutMs=5000",
-            ...(executor ? ["/actions", "/actions/<id>"] : []),
+            ...(executor ? ["/actions", "/actions/<id>", "/actions/<id>/stop"] : []),
             "/dialogue", ...(chooseDialogue ? ["/dialogue/choose"] : []),
             ...(scheduler ? ["/messages", "/stream"] : [])],
         });

@@ -99,8 +99,14 @@ async function check(call, squadId, session) {
 }
 
 function requireRunning(state) {
+  requireNoRadioChoice(state);
   requireCondition(state.focused && !state.time.paused && state.advance?.state !== "running",
     "game_blocked", "请保持游戏在前台并以 1 倍速运行。");
+}
+
+function requireNoRadioChoice(state) {
+  requireCondition(!state.radio_paused && !state.dialogue?.choice_id,
+    "dialogue_choice_pending", "等待无线电对话结束后再提交小队订单。");
 }
 
 async function availableSquad(call, state, player, squadId) {
@@ -156,6 +162,7 @@ export async function executeCoopOrder(call, {
     requireRunning(await readState(call, session));
     const paused = await call("pause", control);
     pausedByUs = paused.time.gameplay_pause;
+    requireNoRadioChoice(paused);
     requireCondition(paused.session_id === session && pausedByUs && paused.focused &&
       !paused.time.popup_pause && !paused.time.ui_pause, "game_blocked", "游戏状态变了，请重新查看局势。");
     const current = await availableSquad(call, paused, player, squadId);
@@ -179,7 +186,8 @@ export async function executeCoopOrder(call, {
     if (pausedByUs) {
       try {
         const state = await readState(call, session);
-        if (state.time.gameplay_pause && !state.time.popup_pause && !state.time.ui_pause) {
+        if (state.time.gameplay_pause && !state.time.popup_pause && !state.time.ui_pause &&
+            !state.radio_paused && !state.dialogue?.choice_id) {
           const resumed = await call("advance", { ...control, seconds: 1, keep_running: true, allow_background: true });
           requireCondition(!resumed.time.paused, "resume_blocked", "游戏未恢复 1 倍速。");
         }

@@ -467,9 +467,9 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
 
   registerLocal(
     "get_combat_estimate",
-    "Heuristic combat estimate for chosen squads against one hostile group: firepower scores, member counts, HP, and advice (attack / retreat / need reinforcements).",
+    "Compare firepower and check current attack conditions for selected player squads against a visible hostile group.",
     {
-      squad_ids: z.array(z.string().min(1).max(64)).max(6).optional().describe("Squads to send (default: all AI squads)"),
+      squad_ids: z.array(z.string().min(1).max(64)).min(1).max(6).optional().describe("Squads to assess (default: all player squads)"),
       group_id: z.string().min(1).max(64),
       virtual: z.boolean().optional(),
     },
@@ -478,20 +478,33 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
       const sessionId = state.session_id;
       const [squads, groups, weapons] = await Promise.all([
         readAll(request, sessionId, "squads"),
-        loadGroups(request, sessionId),
+        readAll(request, sessionId, args.virtual ? "virtual_groups" : "groups"),
         readAll(request, sessionId, "weapons"),
       ]);
       const weaponTable = new Map(weapons.map((weapon) => [String(weapon.id), weapon]));
-      const group = groups.find((entry) => String(entry.id) === String(args.group_id));
-      if (!group) throw new Error(`未找到敌群 ${args.group_id}（可能已被消灭）`);
-      const squadRows = summarizeSquads(squads, []).filter((squad) => (args.squad_ids ? args.squad_ids.includes(squad.id) : true));
+      const group = groups.find((entry) => String(entry.id) === args.group_id && entry.visible &&
+        (entry.hostile_to_player ?? isHostile(entry)));
+      if (!group) return { ok: false, code: "invalid_attack_target", message: "请选择当前可见的敌群。" };
+      const squadRows = squads.filter((squad) => !args.squad_ids || args.squad_ids.includes(String(squad.id)));
+      if (!squadRows.length || args.squad_ids?.some((id) => !squadRows.some((squad) => String(squad.id) === id)))
+        return { ok: false, code: "squad_unavailable", message: "请选择当前存在的玩家小队。" };
+      const checks = await Promise.all(squadRows.map(async (squad) => {
+        try {
+          const result = await request("get_attack_conditions", { session_id: sessionId,
+            squad_id: String(squad.id), group_id: args.group_id, virtual: args.virtual });
+          if (!result?.ok) return { squadId: squad.id, code: result?.code ?? "attack_conditions_unavailable" };
+          return { squadId: squad.id, mode: result.mode, paused: result.paused, members: result.members };
+        } catch {
+          return { squadId: squad.id, code: "attack_conditions_unavailable" };
+        }
+      }));
       let squadPower = 0;
       let squadMembers = 0;
       let squadHp = 0;
       let squadHpMax = 0;
       let ammoTotal = 0;
       const squadDetail = [];
-      for (const squad of squadRows) {
+      for (const [index, squad] of squadRows.entries()) {
         let power = 0;
         let members = 0;
         for (const member of squad.members ?? []) {
@@ -499,16 +512,34 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
           power += WEAPON_POWER[member.weapon_id] ?? 0.3;
           ammoTotal += member.ammo ?? 0;
           squadHp += member.hp ?? 100;
-          squadHpMax += 100;
+          squadHpMax += member.max_hp ?? 100;
         }
         squadMembers += members;
         squadPower += power;
-        squadDetail.push({ squadId: squad.id, members, power: round(power, 2), minHp: squad.minHp });
+        const check = checks[index];
+        const hp = squad.members?.map((member) => member.hp).filter(Number.isFinite) ?? [];
+        squadDetail.push({ squadId: squad.id, members, power: round(power, 2), minHp: hp.length ? Math.min(...hp) : null,
+          attack: check.mode === "settlement" ? {
+            inRange: check.members.filter((member) => member.in_range).length,
+            canEngage: check.members.filter((member) => member.can_engage_from_position).length,
+            canAttackNow: check.members.filter((member) => member.can_attack_now).length,
+          } : { mode: check.mode, code: check.code } });
       }
       const enemy = weaponMix(group);
       const ratio = enemy.power > 0 ? round(squadPower / enemy.power, 2) : null;
       let advice;
-      if (ratio === null) advice = "敌群没有可评估武器，直接观察即可";
+      const localChecks = checks.filter((check) => check.mode === "settlement");
+      const liveMembers = localChecks.flatMap((check) => check.members);
+      if (squadDetail.some((squad) => squad.minHp != null && squad.minHp < 60) ||
+          liveMembers.some((member) => member.equipped_weapon_needs_ammo))
+        advice = "所选小队有伤员或缺弹，先撤退或补给";
+      else if (checks.some((check) => check.code)) advice = "开火条件读取失败，先核对目标与游戏连接";
+      else if (localChecks.some((check) => check.paused)) advice = "游戏暂停中，恢复后重查开火条件";
+      else if (localChecks.length && !liveMembers.some((member) => member.can_engage_from_position))
+        advice = "当前站位无法交火，先检查距离、视线和载具状态";
+      else if (localChecks.length && !liveMembers.some((member) => member.can_attack_now))
+        advice = "当前还不能开火，检查队员冷却和状态";
+      else if (ratio === null) advice = "敌群没有可评估武器，直接观察即可";
       else if (ratio >= 2.5) advice = "优势明显，可主动进攻（注意先集火再近身）";
       else if (ratio >= 1.6) advice = "有优势但不宽裕，建议诱敌/掩体/爆炸物先手";
       else if (ratio >= 1.0) advice = "势均力敌，不划算；建议增援或换目标";
@@ -523,7 +554,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
           faction: group.faction,
           members: group.member_count,
           weapons: enemy,
-          totalHp: round(enemyHp),
+          totalHp: group.members ? round(enemyHp) : null,
           position: { x: round(group.position.x), z: round(group.position.z) },
         },
         squads: { count: squadRows.length, members: squadMembers, power: round(squadPower, 2), ammoTotal, hpRatio: squadHpMax ? round(squadHp / squadHpMax, 2) : null, detail: squadDetail },
