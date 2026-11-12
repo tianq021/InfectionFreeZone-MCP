@@ -1,0 +1,8 @@
+/.local/
+/node_modules/
+/plugin/bin/
+/plugin/obj/
+/NVIDIA Corporation/
+*.log
+*.bak
+*.bak-*

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>IfzMcp</AssemblyName>
+    <IfzManaged Condition="'$(IfzManaged)' == ''">$(MSBuildThisFileDirectory)../.local/game/Infection Free Zone_Data/Managed</IfzManaged>
+    <BepInExCore Condition="'$(BepInExCore)' == ''">$(MSBuildThisFileDirectory)../.local/game/BepInEx/core</BepInExCore>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="BepInEx" HintPath="$(BepInExCore)/BepInEx.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(BepInExCore)/0Harmony.dll" Private="false" />
+    <Reference Include="Ifz" HintPath="$(IfzManaged)/Ifz.dll" Private="false" />
+    <Reference Include="MapOperator" HintPath="$(IfzManaged)/MapOperator.dll" Private="false" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(IfzManaged)/Newtonsoft.Json.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(IfzManaged)/UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(IfzManaged)/UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule" HintPath="$(IfzManaged)/UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(IfzManaged)/UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="Zenject" HintPath="$(IfzManaged)/Zenject.dll" Private="false" />
+    <Reference Include="AstarPathfindingProject" HintPath="$(IfzManaged)/AstarPathfindingProject.dll" Private="false" />
+    <Reference Include="Sirenix.Serialization" HintPath="$(IfzManaged)/Sirenix.Serialization.dll" Private="false" />
+  </ItemGroup>
+</Project>

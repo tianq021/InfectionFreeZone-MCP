@@ -1,0 +1,27 @@
+# 示例：根据本机修改 Node 和仓库的绝对路径。
+- insert:
+    - id: mcp-infection-free-zone
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: infection_free_zone
+        transport: stdio
+        command: 'C:\nodejs\node.exe'
+        args:
+          - 'C:\path\to\InfectionFreeZone-MCP\server.mjs'
+          - '--steam'
+          - '--read-only'
+        cwd: 'C:\path\to\InfectionFreeZone-MCP'
+        toolCallTimeoutMs: 15000
+        failOnStartupError: false
+- insert:
+    - id: mcp-ifz-runtime
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: ifz_runtime
+        transport: stdio
+        command: 'C:\nodejs\node.exe'
+        args:
+          - 'C:\path\to\InfectionFreeZone-MCP\runtime\runtime-mcp.mjs'
+        cwd: 'C:\path\to\InfectionFreeZone-MCP'
+        toolCallTimeoutMs: 15000
+        failOnStartupError: false

@@ -1,0 +1,22 @@
+{
+  "name": "infection-free-zone-mcp",
+  "version": "0.2.2",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "weather": "node weather.mjs",
+    "test": "node --test runtime/test/*.test.mjs",
+    "tools:list": "node scripts/check-tools.mjs",
+    "tools:call": "node scripts/check-tools.mjs --call"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "ws": "8.22.2",
+    "zod": "4.6.5"
+  }
+}

@@ -1,0 +1,608 @@
+无感染区 MCP（IFZ MCP）v0.1 —— 介绍和修改
+更新日期：2026-11-10（Asia/Shanghai）
+
+历史说明：下文的本地模型队长及相关命令已退役。现行入口见末尾登记与根目录 README.md。
+
+================================================================
+一、项目介绍
+================================================================
+
+本项目把《无感染区 / Infection Free Zone》游戏本体接成一个本地 MCP 服务，让 AI
+（Codex / DSH 等客户端）在同一局游戏里与玩家 1 倍速同步协作。
+
+架构：
+  游戏进程（Unity + BepInEx 插件）
+    └─ 命名管道（请求/响应，帧式 JSON）
+  Node.js 服务 server.mjs（标准 MCP stdio，20 个工具）
+    ├─ client.mjs       命令行客户端 / coop、captain 工作流入口
+    ├─ coop.mjs         1 倍速协作：预告 → 短暂停 → 下单 → 恢复 1 倍速 → 回读
+    ├─ captain.mjs      本地模型队长：读局势 → 选动作 → 发原生订单
+    └─ captain-model.mjs 本地 Ollama 模型适配（默认 qwen3:1.7b）
+
+适用：本机 Steam build 26104777、Windows x64、Unity Mono。
+测试副本：.local/game（通过 scripts/Start-TestGame.ps1 启动）。
+
+================================================================
+二、v0.1 能力清单
+================================================================
+
+已稳定：
+- 读取：get_state、get_world_data（15 个类目、分页）、get_order、get_navigation_point、
+  status；跨类目覆盖小队/人口/工人/群组/建筑/工地/车辆/仓库/库存/地面资源/武器/事件/地图。
+- 控制：acquire_control / release_control、pause、advance（有界推进、keep_running）、
+  move_squad、attack_group、scavenge_building、return_to_stockroom（步行/乘车）、
+  take_vehicle、set_building_workers、set_stockpile_amount、equip_squad_member、
+  refill_squad_member_ammo、move_npc_group。
+- HUD：hud_message（游戏内悬浮提示）。
+- 协作层：coop（brief / check / scavenge / return，含分段计时）、captain（本地模型队长，
+  --once 预览 / --apply 接管）、watchdog（1.2 秒轮询警戒哨，危险自动回仓）、
+  浮窗聊天（Windows 置顶窗，经 DSH /api/session/prompt 注入消息，支持打断）。
+- 实测数据（第 6 天存档）：单次 MCP 调用 16–20 ms；整轮 7 类读取 115 ms；
+  buildings 6749 条 / 68 页 / 1.34–1.83 s；本地模型单次决策 2.0–2.2 s；
+  单条下单流程 1.4–1.7 s（其中 HUD 预告固定 1 s）。
+
+进行中（P0）：
+- runtime 常驻运行时：统一状态缓存 + 版本 + 增量差分 + 事件检测 + 长轮询；
+  后续异步执行队列、常驻调度器（唤醒 DSH 会话、流式回复、任务中断）、MCP 工具面。
+- 文档：三基础能力设计（架构分析）、游戏数据查询策略、中断与消息不丢失机制、
+  地图数据量/优化/分块读取系列分析。
+
+进行中（P1 - 地图分块优化）：
+- 地图分块方案：10×10 网格（200×200 单位/块），共 100 块；
+  聚落地图与远征地图分层读取，A* 寻路系统内置障碍物（node.Walkable）；
+  客户端按需读取区域数据，预计减少 95-99% 带宽（1.58 MB → ~65 KB/500m 搜索半径）。
+
+================================================================
+三、v0.1 修改登记（2026-11-10）
+================================================================
+
+3.1 已有文件修改
+- README.md：新增“当前状态 / 项目文档 / AI 协作运行时（P0）”章节与文档索引；
+  “读取游戏对象”补充 buildings 数据量与按需读取说明；文末指向 renew 变更登记。
+- client.mjs：新增 coop / captain 工作流入口（--steam 透传、@文件参数读取）。
+- server.mjs：get_world_data 分页上限放宽到 100；工具描述同步更新。
+- plugin/WorldData.cs：新增 events 类目（活动任务 + 已触发事件）、groups 的
+  hostile_to_player 判定、事件标记坐标；补充与队长决策相关的字段。
+
+3.2 新增代码
+- captain.mjs：本地模型队长（选项生成、动作校验、订单提交、控制权租约管理）。
+- captain-model.mjs：Ollama /api/chat 适配（JSON 输出约束、超时取消）。
+- coop.mjs：1 倍速协作入口（brief / check / scavenge / return，分段计时）。
+- runtime/pipe-client.mjs：直连插件命名管道的客户端（帧式协议、超时/离线码）。
+- runtime/events.mjs：语义事件引擎（敌情逼近、低血、被围、订单完成/变化、满载、
+  低补给、昼夜/新一天、任务变化、卡住、暂停/焦点变化；带去重与迟滞）。
+- runtime/state-service.mjs：统一状态缓存（版本/差分/事件/长轮询/掉线重连/会话切换）。
+- runtime/README.md：运行时模块说明与接口草案。
+
+3.3 新增文档
+- 架构分析-三大基础能力.md：三系统设计、DSH 外部驱动与流式验证、中断与消息不丢失
+  机制（源码核实）、返回数据体量排名、游戏数据查询策略。
+- 地图数据量分析.md：地图相关类目体量实测（buildings 占 95%+）。
+- 地图数据优化方案.md：P0 纯 Node → P1 插件过滤/原子快照 → P2 推送订阅。
+- 地图分块读取方案.md：按地理网格分块读取建筑（10×10，200×200/块）。
+- 地图分块分配策略.md：网格划分、坐标→块 O(1) 定位、搜索半径覆盖块数。
+- 地图分层结构分析.md：聚落地图与远征地图分层/分块策略。
+- 地图分块数量与障碍物分析.md：A* 寻路与障碍物、100 块方案与延迟估算。
+- renew/README.md、renew/0.1.txt：变更登记规范与本文。
+- 地图分块优化实施计划.md：100 块方案最终确认、C# 实现代码草案、server.mjs 工具定义。
+
+3.4 关键结论（影响后续实现）
+- 游戏返回数据量排名：buildings（约 1.58 MB/68 页）>> groups（每群最多 32 人明细，
+  约几十 KB）> squads（约 6.8 KB）> events（约 4 KB）> vehicles（约 2.6 KB）。
+- “只查变化”分两层：AI 侧可由 runtime 缓存 + 差分 + 事件实现（P0 即可）；
+  桥接侧当前无版本号/脏标记/推送，要源头只查变化需插件增强（world_probe /
+  world_snapshot / buildings 过滤）。
+- 中断与消息不丢失：DSH 的 session/cancel 使用 keepInbox=true，保留排队与引导消息；
+  已派发工具调用的结果会提交、未派发工具调用落 abort 错误结果，历史保持合法；
+  但 cancel 后不会自动继续队列，调度器必须“cancel → prompt”成对唤醒。
+- 大脑选型：不用本地小模型兜底，只用 DSH 会话（DeepSeek），即时性靠事件与异步执行器。
+- 地图分块方案：10×10 网格（200×200 单位/块），共 100 块；聚落地图与远征地图分层；
+  障碍物由 A* 寻路系统内置（node.Walkable），无需额外标记；
+  客户端按需读取区域数据，预计减少 95-99% 带宽。
+
+================================================================
+四、使用入口
+================================================================
+
+# 查看状态
+node client.mjs --steam status
+node client.mjs --steam get_state
+
+# 1 倍速协作
+node client.mjs --steam coop brief --near 835
+node client.mjs --steam coop scavenge --session <会话ID> --player 834 --squad 835 \
+  --building <建筑ID> --notice "去总部东南约200米的楼搜刮"
+
+# 本地模型队长（预览 / 接管）
+node client.mjs --steam captain --player 834 --squads 835,836,1726 --once
+node client.mjs --steam captain --player 834 --squads 835,836,1726 --apply
+
+# 实机耗时测量（.local/steam-test/，需游戏+Ollama 运行）
+node .local/steam-test/latency-probe.mjs
+node .local/steam-test/captain-profile.mjs --player 830 --squads 831,832
+
+================================================================
+五、已知限制与下一步
+================================================================
+
+已知限制：
+- buildings 全量读取是最大负担（68 页/1.3–1.8 s）；P1 分块方案已设计（100 块），待实施。
+- groups 对隐藏群组也返回最多 32 人明细，常读类目中体量偏大。
+- 多条订单串行执行，每条有 HUD 预告固定 1 s 等待。
+- DSH 会话取消后需外部补唤醒；长轮询工具需接入取消信号。
+
+下一步（按优先级）：
+P0（不改插件）：runtime 状态服务测试与上线 → 异步执行队列 → 常驻调度器
+  （DSH prompt/steer/cancel + session/follow 流式）→ runtime MCP 工具面。
+P1（插件增强）：
+  - P1.1 地图分块读取：10×10 网格（200×200/块），~80 行 C#，95% 带宽节省
+    （ReadBuildingChunk、ReadExpeditionChunk、统一 map_chunk 工具）
+  - P1.2 world_probe 变更指纹、world_snapshot 原子批量
+  - P1.3 buildings 过滤参数、limit 放宽、groups 明细按需
+P2（长期）：推送订阅、多小队批量下单、指标面板与回归测试。
+
+================================================================
+六、变更登记约定
+================================================================
+
+每次更新和修改都必须登记在 renew/README.md；
+版本说明与修改清单写在本文件（0.1.txt）。
+
+================================================================
+七、P0 运行时进展（2026-11-10 追加）
+================================================================
+
+已完成（MVP）：
+- runtime/pipe-client.mjs：命名管道帧式客户端（超时/离线码归一化）。
+- runtime/events.mjs：语义事件引擎（敌情/低血/订单/满载/低补给/昼夜/任务/卡住，
+  带去重窗口与迟滞）。
+- runtime/state-service.mjs：统一状态缓存 + 内容版本（忽略游戏时钟漂移）+ 按类目
+  差分 + 事件游标 + 长轮询 + 掉线/恢复 + 会话切换重建 + 健康指标；10 项单测通过。
+- runtime/hub.mjs：本地 HTTP API（/health、/state、/state/wait、/events、/events/wait）；
+  5 项单测通过。
+- runtime/runtime.mjs：启动入口（--steam / --port / --poll-ms / --buildings）。
+- runtime/test/：假桥 + 固定世界夹具 + 15 项测试。
+
+验证命令与结果：
+  node --test runtime/test/state-service.test.mjs runtime/test/hub.test.mjs
+  => 15 项全部通过（含时钟漂移不升版本、差分字段、事件去重、长轮询、会话切换、
+     掉线恢复、建筑分页过滤、HTTP API）。
+
+未完成 / 已知问题：
+- runtime.mjs 尚未实机联调（游戏关闭、桥接离线时只能看到 offline 状态）。
+- exec-service / scheduler / dsh-client / runtime-mcp 未实现。
+- pipe-client 无独立单测（当前由假桥间接覆盖）。
+
+下一步（P0 继续）：
+1) 实机联调 runtime：开测试副本后对比 AI 读取（目标 7 次/115ms → 0–1 次/<5ms）；
+2) exec-service 异步执行（提交即返回、批量 pause、结果回注）；
+3) dsh-client + scheduler（prompt/steer/cancel + session/follow 流式、用户消息最高优先级）；
+4) runtime-mcp 工具面并接入 MCP 配置。
+
+================================================================
+追加登记 2026-11-10
+================================================================
+
+- 地图查询拆为 plugin/MapQuery.cs 与 map-query.mjs，外部 AI 通过 get_map_buildings
+  选择 full、nearby 或 route，并用 next_offset 翻页。单位继续通过 get_world_data 查询。
+- 地图后台刷新故障单独记入 /health 的 mapError。coop brief 保留单位信息并返回 map_error。
+- 本地模型队长入口退役，旧脚本移至 .local/retired-captain。由 Codex、DSH 等外部 AI
+  经 MCP 读取和下单。
+
+================================================================
+追加登记 2026-11-10：Runtime 异步协作
+================================================================
+
+- 单写者任务队列通过原生 request_id 跟踪结果，并发布 action_finished。
+- 指定 DSH 会话后合并游戏事件，按优先级投递。助手增量通过 SSE 输出。
+- 独立 runtime MCP 提供状态、事件、提交、查询和取消。动作及 DSH 投递显式启用。
+- 假桥执行及 SSE 集成通过。已对实际 DSH 完成只读会话订阅，真实游戏写入待验。
+
+================================================================
+追加登记 2026-11-11：DSH 自主带队
+================================================================
+
+- DSH 配置把原生 MCP 用作只读调查入口，通过 runtime MCP 提交小队动作。
+- 执行器检查游戏会话及分工是否仍有效，分工可通过 runtime_health 查询。
+- 分工首次就绪时唤醒指定的 DSH 会话。对话中断后，后台订单仍可独立执行和回报。
+- 22 项隔离测试通过。实机启用需指定游戏会话、玩家保留队及 DSH 会话。
+
+================================================================
+追加登记 2026-11-11：浮窗实时协作
+================================================================
+
+- 本机浮窗用运行时双向传输，玩家消息可越过等待确认的自动通知。
+- DSH 收件与读入回执分开显示，回复文本和订单结果通过事件流传回。
+- 运行时去掉 HUD 预告后的固定等待，失焦或暂停期间订单排队并有过期上限。
+- 24 项隔离测试通过。浮窗实机显示和操作待启用时验证。
+- Windows 浮窗入口 `scripts/Start-RuntimeChat.ps1` 可从仓库运行。它使用运行时端口收发消息和订单回执。
+
+================================================================
+追加登记 2026-11-11：天气 / 月相查询
+================================================================
+
+- 游戏桥接没有天气接口，天气与月相只存在于存档 data.json 的
+  WeatherControllerSerialized：CurrentWeather（云/降水/温度/风/IsFullMoon）
+  与 WeatherForecast（38 天，含 IsFullMoon）。
+- 新增 weather.mjs：定位最新存档目录 → 读取 CompressedData.zip 内 data.json
+  （内置最小 zip 读取，deflate/stored）→ 截出并解析天气段 → 摘要/JSON 输出。
+  支持 --json、--all-forecast、--save-root；自动在 Steam 存档根目录与
+  .local/test-data 之间选择。
+- server.mjs 新增本地工具 get_weather（不经命名管道），参数 save_root、
+  all_forecast；只读模式下同样可用。
+- 实测（第 18 天 18:00 自动存档）：IsFullMoon=true，云 0%、降水 0、
+  温度 17.5°C、风 4.7；满月周期 6 天（预报日 2/8/14/20/26/32/38）。
+- 限制：数据来自最近一次自动存档，最多滞后约一个游戏日；满月夜通常
+  伴随大规模尸潮，可作为防守提前量。
+
+================================================================
+追加登记 2026-11-11：实战经验文档
+================================================================
+
+- 新增 经验-无感染区AI协作.md：面向"下一个接手的模型"的操作手册。
+- 内容：能力边界（远征/医疗包/天气/建筑血量不可直接用）、1 倍速
+  协作节奏（lease → pause → 写 → advance keep_running、request_id
+  去重、speed_locked、失焦降频）、小队与车辆行为、搜刮失败四原因
+  （重点：围墙导致 CanGoToStructure 失败）、敌情读取与攻击前置条件
+  （visible 才能 attack_group）、满月尸潮实测、天气/月相读法、
+  玩家沟通与打断协议、常见误判清单、实战数据、快速上手清单。
+- README 项目文档索引加入该文档。
+- 实测来源：2026-11-11 会话，第 14–21 天，满月尸潮 6 群约 33 只
+  全歼、12 人零掉血；金属储备 2 → 168。
+
+================================================================
+追加登记 2026-11-11：交接文档（游戏内浮窗 + 多智能体监视）
+================================================================
+
+- 新增 handover/ 目录：
+  - handover/README.md：交接主文档。含启动所需 4 个值、runtime 启动命令、
+    DSH 会话 id 必须补 "session-" 前缀的坑、浮窗启动与用法、两个只读
+    监视智能体的职责/脚本/文件、重启恢复清单、故障排查表、边界纪律。
+  - handover/Start-ChatWindow-ps5.ps1：PowerShell 5.1 兼容的游戏内聊天
+    浮窗启动器（本机无 pwsh 7）。相对仓库脚本改动：去掉 #requires 7.0、
+    用 Arguments 字符串替代 ArgumentList、去掉 StandardInputEncoding、
+    发送 JSON 做 \uXXXX ASCII 转义、文件保存为 UTF-8 BOM。
+- runtime/dsh-client.mjs：构造时把裸 UUID 归一化为 "session-<uuid>"，
+  修复 DSH session/follow 返回 session/not-found、浮窗投递
+  dsh_delivery_unconfirmed 的问题。
+- 实测：浮窗由 handover 脚本启动成功（窗口「DSH 游戏聊天」），
+  /health 的 dsh.connected=true，消息投递可达。
+- 多智能体：threat-watch（5s 敌情轮询）与 economy-watch（60s 资源/天气
+  汇总）脚本位于 .local/agents/，共享约定见 .local/agents/SHARED.md；
+  两者只读，游戏写入仅 Lead 执行。
+
+================================================================
+追加登记 2026-11-11：经验文档"问题分析"章节 + 复合 MCP 工具
+================================================================
+
+1) 经验-无感染区AI协作.md 追加"本次会话遇到的问题分析"章节：
+   工具/环境类 4 项（DSH session 前缀、PS 7 缺失、UTF-8 BOM、stdin 编码）、
+   游戏操作类 6 项（scavenge_unavailable 四条件与 IsInteractable、围墙误判、
+   pause 竞争、speed_locked/失焦降频、回仓 mounted 语义、覆盖玩家手点指令）、
+   玩法资源类 3 项（缺枪来源、天气月相读存档、砖木与岗位瓶颈）、
+   多智能体 2 项（后台 job 被回收、runtime 无 worksites）、
+   以及 4 个优先改进项。
+
+2) 新增 tools-extra.mjs，注册 10 个复合/本地工具（不新增桥接方法、不需要
+   重编译插件或重启游戏）：
+   observe、get_threats、get_economy、get_squads_report、get_events_report、
+   get_save_info、get_map_info、get_recommendations、bridge_probe、
+   export_snapshot（只读模式下列不注册）。
+   - 纯函数 summarizeThreats / summarizeEconomy / summarizeEvents /
+     summarizeSquads / buildRecommendations 可单测
+   - 桥接离线时：get_save_info 仍可用；桥接类工具返回结构化错误
+     {ok:false,code,message}，不抛异常
+   - 工具总数 22 → 32（21 桥接 + get_weather + 10 复合）
+3) 校验脚本：.local/test/tool-list-check.mjs（stdio 握手列出 32 个工具）、
+   .local/test/tool-call-check.mjs（离线 get_save_info 成功、observe 优雅报错）。
+   实测通过。
+4) README 增加"复合工具"章节与用法示例。
+
+================================================================
+追加登记 2026-11-11：插件 0.2.0（作弊工具 + 地形栅格）
+================================================================
+
+1) plugin/Cheats.cs（新增）：10 个作弊/调试桥接方法，全部要求写租约（lease），
+   封装游戏自带的 GameConsoleCommandHandler.Instance：
+   - cheat_heal_squads   全员治疗到满血（Health.SetMaxHealth）
+   - cheat_refill_ammo   全队弹药补满（AmmunitionHandler.SetMaxAmmo）
+   - cheat_add_resources 直接向共享库存加资源（ResourcesContainer.AddResource）
+   - cheat_unlock_expedition  解锁全部远征地块
+   - cheat_complete_missions  立即完成所有进行中任务/事件目标（剧情推进）
+   - cheat_scavenge_all  全图废弃建筑一次性标记已搜刮
+   - cheat_set_time      设置天数/小时/时间流速
+   - cheat_spawn_squad   指定坐标生成玩家小队（SpawningSquadAt）
+   - cheat_reveal_groups 显示全部敌对群（含隐藏）
+   - cheat_list          列出可用作弊项
+2) plugin/Terrain.cs（新增）：get_terrain_grid 地形栅格工具，直接采样
+   PathfindingUtils.GetNearestOnGround 的 A* 图节点，一次调用返回：
+   每格类型（G 地面/R 道路/W 水面/B 建筑内/X 不可走/? 无节点/b 桥梁候选）、
+   水面/道路/桥梁/不可走计数、可选高度栅格与高程统计、边界与步长。
+   默认步长 50，max_cells 保护 20000。比逐点 get_navigation_point 快 1-2 个数量级。
+3) plugin/Plugin.cs：Dispatch 注册 get_terrain_grid（读）与 10 个 cheat_*（写，
+   需 session+lease）；版本号 0.1.0 -> 0.2.0。
+4) server.mjs：注册上述 11 个 MCP 工具（get_terrain_grid 为读工具，cheat_* 为写工具）。
+   MCP 工具总数 32 -> 43。
+5) 构建：E:\IncMCP\.tools\dotnet\dotnet.exe build plugin\IfzMcp.csproj -c Release
+   -p:IfzManaged="F:\SteamLibrary\steamapps\common\Infection Free Zone\Infection Free Zone_Data\Managed"
+   -p:BepInExCore="F:\SteamLibrary\steamapps\common\Infection Free Zone\BepInEx\core"
+   部署：覆盖 BepInEx\plugins\IfzMcp.dll（旧版备份 IfzMcp.dll.bak-20261111），需重启游戏生效。
+6) 研究记录：存档内 Terrain/*.bytes（3x3 块，各约 300KB）为 MessagePack 结构
+   （0x83 "version"/"1"/"data" 头），可作为离线地形解析的后续方向；当前优先用插件
+   在线栅格（更快、含道路/水面语义）。
+
+----------------------------------------------------------------
+追加（2026-11-12）：地形栅格修正（v0.2.0 第二次构建）
+----------------------------------------------------------------
+问题：首版 get_terrain_grid 使用 PathfindingUtils.GetNearestOnGround（tags=1 约束），
+      只会返回“地面”节点，导致水面/道路/建筑全部被归为 G。
+修正：改为 AstarPath.data.recastGraph.GetNearest(position, NNConstraint.None)，
+      直接按节点 Tag 分类：0 地面 / 2 水面 / 4 墙 / 6、7 建筑内 / 29、31 道路；
+      增加 D（脱离节点=深水/悬崖）、b（桥梁候选：道路两侧 2 格内有水面）。
+默认边界改用 Map.Bound（真实可玩区域，不含边界 padding）。
+实测（Ruciane 第 1 天，step=50）：42x42 格，JSON 26.5KB，
+地面 1450 / 道路 29 / 水面 273 / 建筑 12 / 桥 9，高程 13.5–63.4（均值 38.2）；
+step=25 时 83x83 也可在 1.1s 内返回（含 CLI 启动开销）。
+作弊链路实测（第 1 天）：cheat_reveal_groups shown=0、cheat_heal_squads healed=12、
+cheat_refill_ammo refilled=12、cheat_add_resources 金属 12→22 后经 set_stockpile_amount
+回滚回 12，前后数据一致。破坏性命令（complete_missions/scavenge_all/set_time/spawn_squad）
+按政策未执行。
+
+----------------------------------------------------------------
+追加（2026-11-12）：第二批 10 个复合 MCP 工具（工具总数 43 -> 53）
+----------------------------------------------------------------
+新增 tools-extra2.mjs：get_terrain_report、plan_route、get_loot_targets、
+get_scavenge_plan、get_daily_report、get_colonists_report、get_weapons_report、
+get_worker_balance、get_changes、get_vehicle_hunt。
+- plan_route 在 get_terrain_grid 栅格上跑 A*：地面 1、道路 0.7、桥 1、建筑 1.2、
+  脱离节点 6，水/墙/无节点不可通行；输出距离/途经点/过桥格数。
+- get_changes 使用 .local/cache/get_changes.json 持久化基线，跨进程可用（实测：
+  金属 12→17 后检测到 delta=5）。
+- 实测（Ruciane 第 1 天）：日报/人口(56 人/成人50/儿童6/武装12)/武器(14 类)/
+  搜刮目标(225 栋可搜,5 个建筑簇)/搜刮计划(3 队各 3 站)/路线(237 m)/
+  岗位(空置 26 岗)/地形(水16.6%/路1.6%,桥4,高程14.5-59.7) 全部正常。
+
+----------------------------------------------------------------
+追加（2026-11-12）：第三批 5 个敌人分析工具（工具总数 53 -> 58）
+----------------------------------------------------------------
+新增 tools-extra3.mjs：
+- get_enemy_report  敌群总览（类型/人数/武器构成/火力评分/距离方位/逼近/最近小队）
+- get_enemy_lairs   窝点清单（感染犬/感染者窝点分类、威胁排序、总感染数）
+- get_enemy_moves   移动追踪（.local/cache/enemy-moves.json 持久化基线，计算位移）
+- get_combat_estimate 战力评估（武器权重启发式：步枪1.0/狙击1.1/霰弹0.9/手枪0.6/
+  近战0.2/感染犬0.35/感染者0.4；给出进攻/增援/撤退建议）
+- get_enemy_density 敌群密度 ASCII 热图
+实测（第 1 天，敌群 0）：5 个工具全部返回 ok，热图正常显示总部 @，
+  战力评估对不存在的群返回友好错误 "未找到敌群 …（可能已被消灭）"。
+敌人相关能力合计 9 项（上述 5 + get_threats + get_world_data(groups) +
+  attack_group + cheat_reveal_groups），另有 threat-watch 监视脚本。
+
+----------------------------------------------------------------
+追加（2026-11-12）：中立人员工具（工具总数 58 -> 59）
+----------------------------------------------------------------
+新增 get_neutral_report：
+- 列出非敌对群：中立匪帮（hostile_to_player=false）、野生动物、移民等
+- 字段：type/faction/members/weaponMix/距离方位/visible/hostileToPlayer/attackable(恒 false)
+- 说明：攻击接口要求 IsEnemy，因此中立群不可攻击；动物可驱赶或无视
+- 参数：radius（默认 3000）、include_animals（默认 true）、include_hidden（默认 true）
+实测：第 1 天当前无任何群（敌 0 / 中立 0），工具返回 ok；接口设计对空数据安全。
+
+----------------------------------------------------------------
+追加（2026-11-12）：感染者变体识别（工具总数 59 -> 60）
+----------------------------------------------------------------
+新增 get_infected_types：按变体统计感染者（普通/自爆/阿尔法/犬/鸟/低吼/尖啸/巨型/巨兽/强化版），
+输出数量、HP 上下限、tier、距离方位、最近小队、是否窝点。
+get_enemy_report 增强：每行增加 variants（变体构成）与 maxVariantTier；
+weaponMix 对感染者改用变体战力权重（自爆 1.3 / 阿尔法 1.6 / 巨兽 2.0 / 强化再提升）。
+识别优先级：成员 weapon_id（eq_inf_*）→ 群 type（inf_*，含 hideout_infected_* 前缀剥离）。
+变体表来源：ResourceID.cs（eq_inf_alpha/bear/bird/dog/growler/huge/human/moose/screamer/
+tank_bull/tank_moose + *_boosted + eq_inf_human_explosives 自爆）与 InfectedTypes.cs。
+单测：.local/test/variant-check.mjs 全部映射正确（普通/自爆/阿尔法/犬/尖啸/强化巨型/巨兽/窝点犬）。
+
+----------------------------------------------------------------
+追加（2026-11-12）：感染动物与野生动物（工具总数 60 -> 61）
+----------------------------------------------------------------
+新增 get_animal_report：
+- 感染动物（敌对）：感染犬/感染鸟/感染熊/感染驼鹿/感染公牛/巨兽(坦克级)及强化版
+- 普通野生动物（中立）：野猪、鹿
+- 字段：species（物种）、infected、hostile、members、距离方位、visible
+- 参数：radius、include_normal、include_hidden
+增强：
+- INFECTED_VARIANTS 全部加 category（人类/动物/鸟类），get_infected_types 返回 byCategory
+- get_neutral_report 增加 species 字段（动物按成员 eq_animal_* / eq_inf_* 识别）
+- animalSpeciesOf() 覆盖全部 eq_animal_* 与 eq_inf_*（含 *_boosted）
+游戏数据依据：ResourceID.cs 中 eq_animal_boar / eq_animal_deer（普通动物），
+eq_inf_dog/bird/bear/moose/bull/tank_bull/tank_moose（感染动物）+ *_boosted。
+实测（第 1 天）：当前地图野生鹿 7 只、野猪 5 只（3 个群，距总部 196-271m）；
+注意野生动物不可用 attack_group 攻击（IsEnemy 校验为假），需游戏内方式处理。
+
+----------------------------------------------------------------
+追加（2026-11-12）：进度解锁 + 暂停诊断（工具总数 61 -> 64）
+----------------------------------------------------------------
+新增：
+- get_progression  读取存档 ContentStateController._contentStatesList（232 项），
+  输出已解锁/未解锁数量与条目；category=enemy/building/all，支持 filter 过滤；
+  离线可用（不需要游戏在跑）。实测本局：已解锁 72 项。
+  关键发现（第 1 天新档）：
+    未解锁：GroupSpawn_inf_human_small/medium/big、inf_dog_small/medium/big、
+      GroupSpawn_inf_bear/moose/bull（巨兽）、GroupSpawn_inf_explosive_*（自爆感染者）、
+      SwarmsAlwaysWithAlpha（阿尔法）、provirus soldier 系列、bandit 各档与武器变体；
+    已解锁：GroupSpawn_inf_human_tiny、inf_human_hive、HideoutMainGroupSpawn_infected_human/dog/
+      bandits、动物（野猪/鹿）各档、hideout 巡逻匪帮系列。
+    结论：巨兽/自爆/阿尔法都是"后期进度解锁内容"，不是新版本追加；感染鸟在当前
+      spawn 表中没有 GroupSpawn_inf_bird 条目（资源存在但无生成项，可能属事件/DLC 内容）。
+- diagnose_pause  区分弹窗/UI/手动或事件暂停/失焦，给出恢复建议；提示 advance 前置条件。
+- wait_unpaused   轮询直至解除暂停（1-120s），超时返回 paused_by_popup/ui/game。
+说明：插件仍未提供 unpause 接口（强制恢复已禁用）；弹窗与面板需玩家点击。
+
+----------------------------------------------------------------
+追加（2026-11-12）：建筑图标 / 远征 / 车辆 / 任务（工具总数 64 -> 73）
+----------------------------------------------------------------
+插件新增桥接方法：
+- find_buildings_by_poi  按 PoiArchetype 找建筑（复用 Map.PoiContainer.GetTagsForPoiArchetype +
+  building.OsmBuilding.Tags.ContainsOsmTag，与游戏地图图标同规则）；
+  图标枚举：Research/Drugs/Tools/Food/Bakery/Barn/Fuel/Gun/Parking/Expedition/Warehouse/Sport/Museum/Metal
+- get_building_info      单栋详情：state/type/poi_icons/has_gun/has_fuel/.../搜刮进度/剩余物资
+- get_scavenge_progress  所有进行中搜刮：进度 0-1、剩余时间、剩余箱数、里面人数
+- get_expedition_tiles   远征瓦片：tx/ty/zoom、area_type、location_type、poi_icons、
+  scavengable/walkable/enabled/in_fog、搜刮进度、已获资源（需先在游戏里打开世界地图加载）
+- get_vehicle_map        全图车辆（含未发现）：类型/状态/油量/装载/货物/距离
+- get_missions           任务详情：标题键/章节/限时/目标类型与进度数字（击杀数、窝点数、
+  建筑访问数、可选目标），include_types 可列出全部 ObjectiveType
+新增作弊：
+- cheat_complete_mission 只完成指定 mission_id 的目标（比 cheat_complete_missions 精细）
+新增复合工具（tools-extra4.mjs）：
+- get_resource_hotspots  按图标类型统计建筑数量与最近位置
+- get_expedition_summary 远征汇总（地块分布/资源图标总量/最富地块）
+实测说明：车辆类目此前为 0 是因为 get_world_data 过滤了未发现车辆；
+远征资源图标在瓦片加载后即可读；建筑具体物资仍需小队首次进入后才生成。
+
+----------------------------------------------------------------
+追加（2026-11-12）：任务详情 + 任务行动计划（工具总数 73 -> 74）
+----------------------------------------------------------------
+插件新增：
+- get_missions  活动任务详情：id/title_key/chapter_id/time_to_resolve(01)/
+  blocking_new_zone/markers(任务标记坐标)/objectives（type、completed、optional、
+  targetCount、characterCountToKill、killedCharacterCount、allHideoutsTargetCount、
+  allRemainingHideoutsCount、buildingCountToVisitState）；include_types 可列全部 ObjectiveType。
+- cheat_complete_mission  仅完成指定 mission_id 的目标（游戏 Objective.Complete 入口）。
+复合工具新增：
+- get_mission_plan  按目标类型生成可执行计划：击杀类给最近敌对群+最近小队；
+  搜刮类给最近可搜建筑；收集/生产类给空置工地；治疗类给受伤队伍；
+  SendToMarker 给标记坐标与最近小队；AdaptBuilding 类标注"需玩家选楼"；
+  SurviveNight 给日落倒计时。
+说明：用户明确"做任务不是跳过"，因此默认走正常玩法推进；作弊完成仅限紧急，
+由 AI 判断并遵守手写政策（handover/README.md 第 9 节）。
+注：get_mission_plan 中建筑数据通过 get_map_buildings 分页读取（最多 80 页）。
+
+================================================================
+v0.2.2 版本收口登记（2026-11-12）
+================================================================
+
+一、版本与工具
+- 插件版本：0.2.0 -> 0.2.2（BepInPlugin / status.version / 启动日志三处同步）
+- 插件桥接方法：36 个；MCP 工具：74 个（桥接只读 13 + 桥接写 15 + 作弊 11 + 本地 35 + 天气 1）
+  验证：node .local/test/tool-list-check.mjs => count = 74
+
+二、0.2.2 新增能力（相对 0.2.0）
+1) 地形：get_terrain_grid（无约束 A* 图采样：地面/水/墙/建筑/道路/桥候选/高程）
+2) 建筑：get_building_info（资源图标 poi_icons、has_gun/has_fuel/...、搜刮进度、剩余物资）、
+   get_scavenge_progress（进行中搜刮进度）、find_buildings_by_poi（按图标找建筑）
+   图标枚举：Research/Drugs/Tools/Food/Bakery/Barn/Fuel/Gun/Parking/Expedition/Warehouse/Sport/Museum/Metal
+3) 远征：get_expedition_tiles（地块类型/位置类型/资源图标/搜刮进度/已获资源；
+   需先在游戏内打开世界地图加载瓦片）
+4) 车辆：get_vehicle_map（全图车辆，含未发现；get_world_data(vehicles) 只含已发现/玩家拥有）
+5) 任务：get_missions（标题键/章节/限时/目标类型与进度/标记坐标）、
+   cheat_complete_mission（单任务完成，需写租约）
+6) 作弊：cheat_list/heal_squads/refill_ammo/add_resources/unlock_expedition/
+   complete_missions/complete_mission/scavenge_all/set_time/spawn_squad/reveal_groups（共 11）
+7) 复合工具：get_terrain_report、plan_route、get_loot_targets、get_scavenge_plan、
+   get_daily_report、get_colonists_report、get_weapons_report、get_worker_balance、
+   get_changes（文件缓存）、get_vehicle_hunt、get_enemy_report、get_enemy_lairs、
+   get_enemy_moves、get_combat_estimate、get_enemy_density、get_infected_types、
+   get_animal_report、get_neutral_report、get_progression、diagnose_pause、wait_unpaused、
+   get_resource_hotspots、get_expedition_summary、get_mission_plan
+
+三、文档
+- README.md 重写为详细版（架构/快速开始/构建部署/工程结构/74 工具总览/
+  复合工具详解/写入链路/作弊政策/浮窗与监视器/数据来源/FAQ/文档索引/变更登记）
+- 新增文档配图（System.Drawing 生成，可重跑 .local/tools/make-docs-images.ps1）：
+  docs/img/architecture.png、docs/img/workflow.png、docs/img/toolmap.png
+- handover/README.md 同步版本 0.2.2 与 74 工具
+- 经验-无感染区AI协作.md 追加 v0.2.2 工具补充与使用要点
+- package.json：version 0.2.2，新增 scripts tools:list / tools:call / terrain:scan
+
+四、校验
+- 全部根目录 *.mjs 通过 node --check
+- README 相对链接/图片 18 个全部存在
+- MCP 工具清单 74；插件已部署到 F:\SteamLibrary\...\BepInEx\plugins\IfzMcp.dll
+  （旧版本备份见同目录 IfzMcp.dll.bak-*）
+- 注意：替换插件需退出游戏；进入聚落后用 node client.mjs --steam status 校验 version=0.2.2
+
+----------------------------------------------------------------
+追加（2026-11-12）：上传 GitHub（v0.2.2 提交）
+----------------------------------------------------------------
+- 提交 dbe594e：28 个文件变更，+5062/-105；已推送到
+  https://github.com/tianq021/InfectionFreeZoneMcp.git (main)
+- 上传内容：插件 0.2.2（Terrain/BuildingInfo/Expedition/Missions/Cheats）、
+  server.mjs(74 工具)、tools-extra1..4、weather.mjs、README 详细版、
+  docs/img 三张配图、handover（PS5.1 浮窗+政策）、经验文档、renew 记录、img 截图
+- 未上传：.local/（忽略，含本机 sid/存档/缓存）、node_modules、plugin/bin|obj
+- 注意：本机 git 全局配置了已失效代理 http://127.0.0.1:29290，
+  推送需 git -c http.proxy= -c https.proxy= push origin main
+- .gitignore 增加 *.bak / *.bak-*
+
+----------------------------------------------------------------
+追加（2026-11-12）：多国翻译（MCP 工具描述 + 多语言 README）
+----------------------------------------------------------------
+1) 新增 i18n.mjs：MCP 工具描述多语言（en 默认、zh-CN、ja、ru），覆盖全部 74 个工具；
+   解析顺序 --lang > IFZ_MCP_LANG > LANG > 默认 en；缺失回退英文原文；
+   启动时 stderr 打印 [ifz-mcp] language=... 便于确认。
+2) server.mjs：tool()/writeTool()/localTool() 注册时按语言本地化描述；
+   McpServer 版本同步为 0.2.2。
+3) 多语言文档：
+   - docs/i18n/README.en.md（英文）
+   - docs/i18n/README.ja.md（日文）
+   - docs/i18n/README.ru.md（俄文）
+   - docs/i18n/images/architecture.png、workflow.png（英文版架构/流程图）
+   - 中文 README 顶部增加语言切换与「运行截图」（引用本地 img/主页面提示.png、img/画面图.png）
+4) 校验：
+   - node .local/test/i18n-check.mjs ja|ru：74 工具描述已切换语言
+   - 四份 README 的相对链接/图片全部存在
+   - 未改动游戏内行为；工具数量仍为 74
+
+----------------------------------------------------------------
+追加（2026-11-12）：GitHub 推送网络问题与本地隧道
+----------------------------------------------------------------
+- 现象：github.com:443 连接超时（DNS -> 20.205.243.166 不可达）；
+  api.github.com 与备用 IP 140.82.112.3/113.3/114.3/121.3 的 443 可达。
+- 方案：新增 scripts/github-tunnel.mjs（本地 CONNECT 隧道，把 github.com:443
+  转发到备用 IP，TLS SNI 仍为 github.com，证书校验正常）。
+  用法：
+    Start-Process node -ArgumentList 'scripts\github-tunnel.mjs','8899' -WindowStyle Hidden
+    git -c http.proxy=http://127.0.0.1:8899 push origin main
+- 已通过隧道推送提交 0f50e14（i18n 多国翻译）与本条文档更新；
+  README FAQ Q10、handover 故障排查表已记录。
+
+----------------------------------------------------------------
+追加（2026-11-12）：主项目文件引用多语言文档
+----------------------------------------------------------------
+- README.md：顶部语言切换、§2「多语言（MCP 工具描述）」、§12 文档索引拆成
+  English / 日本語 / Русский 三行 + 多语言目录行。
+- handover/README.md、经验-无感染区AI协作.md、AI游戏协作规则.md、renew/README.md
+  均在文档头部加入多语言文档链接（相对路径已校验存在）。
+
+----------------------------------------------------------------
+追加（2026-11-12）：README 顶部置顶多语言文档
+----------------------------------------------------------------
+- 主 README 在标题后立即放置「🌐 多语言文档 / Translations」表格
+  （简体中文 / English / 日本語 / Русский），位于中文简介与目录之前；
+  目录首行也加入多语言文档入口。
+- 链接校验：README 26 个相对链接/图片全部存在。
+
+----------------------------------------------------------------
+追加（2026-11-12）：开源/非商业许可证
+----------------------------------------------------------------
+- 许可选择：作者要求"允许大家下载修改、但不允许商业"，采用 PolyForm Noncommercial 1.0.0
+  （源码可见 + 非商业；非 OSI 开源许可）。Required Notice:
+  Copyright (c) 2026 tianq021 and InfectionFreeZoneMcp contributors
+- 新增 LICENSE（许可全文）与 THIRD_PARTY_NOTICES.md（第三方依赖/游戏 IP 说明，
+  声明本仓库不分发游戏本体、游戏资源或 Ifz.dll）。
+- README：§14 许可证章节 + 目录 + 文档索引；package.json license = "SEE LICENSE IN LICENSE"；
+  英/日/俄三语 README 增加 License 段落。
+- 校验：各 README 链接全部存在；仓库仍不含游戏文件。
+
+----------------------------------------------------------------
+追加（2026-11-12）：隧道脚本固定出口 IP
+----------------------------------------------------------------
+- scripts/github-tunnel.mjs 支持第三个参数固定出口 IP：
+  node scripts/github-tunnel.mjs 8899 140.82.112.3
+  首次 push 偶发 SSL_ERROR_SYSCALL，重试一次即可；README FAQ Q10 已补充说明。
+- 许可证提交 01c5909 已推送（PolyForm Noncommercial 1.0.0 + THIRD_PARTY_NOTICES）。
+
+----------------------------------------------------------------
+追加（2026-11-12）：InfectionFreeZone-MCP 公开仓库首发
+----------------------------------------------------------------
+- 发布 v0.2.2 源码、使用文档、可复用配置、图示和测试。
+- 将工具自检纳入 scripts/check-tools.mjs，并更新只读模式测试。
+- 清理公开文档中的本机会话标识和仅适用于原机器的操作说明。
