@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { getWeather } from "./weather.mjs";
+import { groupRelation, isHostile, relationshipCoverage } from "./group-relations.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HQ_FALLBACK = { x: 1331.2, z: 1478.3 };
@@ -80,16 +81,12 @@ export async function readAll(request, sessionId, category, { pageSize = 100, ma
   return items;
 }
 
-function isHostileFaction(faction) {
-  return faction === "Infected" || faction === "Bandits";
-}
-
 /** 计算敌群威胁清单（纯函数，便于测试）。 */
 export function summarizeThreats(groups, { hq = HQ_FALLBACK, squads = [], maxDistance = 1200 } = {}) {
   const playerSquads = squads.filter((squad) => Array.isArray(squad.members));
   const threats = [];
   for (const group of groups ?? []) {
-    if (!isHostileFaction(group.faction)) continue;
+    if (!isHostile(group)) continue;
     const dx = (group.position?.x ?? 0) - hq.x;
     const dz = (group.position?.z ?? 0) - hq.z;
     const distHq = round(planarDistance(group.position?.x ?? 0, group.position?.z ?? 0, hq.x, hq.z));
@@ -124,7 +121,10 @@ export function summarizeThreats(groups, { hq = HQ_FALLBACK, squads = [], maxDis
       moving,
       closing,
       visible: Boolean(group.visible),
-      hostileToPlayer: Boolean(group.hostile_to_player),
+      hostileToPlayer: groupRelation(group).hostile,
+      affiliation_to_player: groupRelation(group).affiliation,
+      relation_source: groupRelation(group).source,
+      attack_condition_hostile_flag: typeof group.hostile_to_player === "boolean" ? group.hostile_to_player : null,
       nearestSquad,
       direction: compass(dx, dz),
     });
@@ -135,6 +135,7 @@ export function summarizeThreats(groups, { hq = HQ_FALLBACK, squads = [], maxDis
     closingCount: threats.filter((t) => t.closing).length,
     movingCount: threats.filter((t) => t.moving).length,
     nearest: threats.slice(0, 12),
+    relationship_coverage: relationshipCoverage(groups),
   };
 }
 
@@ -495,6 +496,7 @@ export function registerExtraTools({ registerLocal, request, readOnly = false })
         ok: true,
         time: state.time,
         recommendations: buildRecommendations({ economy, threats, squads: squadSummary }),
+        relationship_coverage: threats.relationship_coverage,
       };
     },
   );

@@ -179,6 +179,10 @@ public sealed partial class Plugin
         queued_orders = group.OrdersHandlers?.OrdersQueue.Orders.Select(order => order.GetType().Name).ToArray(),
         visible = group.IsVisible(),
         hostile_to_player = hostile,
+        affiliation_to_player = GroupAffiliationToPlayer(group),
+        npc_zone_member = group.HasId(NpcZoneController.NpcZoneGroupId),
+        immigrants_state = group.ImmigrantsState.ToString(),
+        can_be_attacked = GroupCanBeAttacked(group),
         weapon_id = group.Weapon?.ResourceType.ToString(),
         cargo = group.ResourcesContainer.Resources.Where(item => item.Value > 0)
             .ToDictionary(item => item.Key.ToString(), item => item.Value),

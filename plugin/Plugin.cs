@@ -235,6 +235,51 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "get_mood":
                 RequireSession(args);
                 return ReadMood();
+            case "get_research_status":
+                RequireSession(args);
+                return ReadResearchStatus();
+            case "get_research_catalog":
+                RequireSession(args);
+                return ReadResearchCatalog(args);
+            case "get_laws":
+                RequireSession(args);
+                return ReadLaws();
+            case "get_housing":
+                RequireSession(args);
+                return ReadHousing(args);
+            case "get_resource_definitions":
+                RequireSession(args);
+                return ReadResourceDefinitions(args);
+            case "get_storage_capacity":
+                RequireSession(args);
+                return ReadStorageCapacity(args);
+            case "get_population_health":
+                RequireSession(args);
+                return ReadPopulationHealth(args);
+            case "get_food_status":
+                RequireSession(args);
+                return ReadFoodStatus();
+            case "get_resource_flows":
+                RequireSession(args);
+                return ReadResourceFlows(args);
+            case "get_npc_zone":
+                RequireSession(args);
+                return ReadNpcZone(args);
+            case "get_npc_zone_groups":
+                RequireSession(args);
+                return ReadNpcZoneGroups(args);
+            case "get_npc_zone_structures":
+                RequireSession(args);
+                return ReadNpcZoneStructures(args);
+            case "get_group_relations":
+                RequireSession(args);
+                return ReadGroupRelations(args);
+            case "get_convoy_locations":
+                RequireSession(args);
+                return ReadConvoyLocations(args);
+            case "get_convoy_status":
+                RequireSession(args);
+                return ReadConvoyStatus(args);
             case "get_fog_of_war":
                 RequireSession(args);
                 return ReadFogOfWar(args);
@@ -262,6 +307,12 @@ public sealed partial class Plugin : BaseUnityPlugin
             case "get_building_info":
                 RequireSession(args);
                 return ReadBuildingInfo(args);
+            case "get_building_details":
+                RequireSession(args);
+                return ReadBuildingDetails(args);
+            case "get_production_progress":
+                RequireSession(args);
+                return ReadProductionProgress(args);
             case "get_scavenge_progress":
                 RequireSession(args);
                 return ReadScavengeProgress(args);

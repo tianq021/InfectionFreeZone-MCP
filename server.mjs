@@ -7,6 +7,9 @@ import { registerExtraTools } from "./tools-extra.mjs";
 import { registerMoreTools } from "./tools-extra2.mjs";
 import { registerEnemyTools } from "./tools-extra3.mjs";
 import { registerTools4 } from "./tools-extra4.mjs";
+import { registerLogisticsTools } from "./tools-logistics.mjs";
+import { registerOperationsTools } from "./tools-operations.mjs";
+import { registerTacticalTools } from "./tools-tactical.mjs";
 import { dialogueChoiceInput } from "./runtime/dialogue.mjs";
 import { createPipeClient } from "./runtime/pipe-client.mjs";
 import { registerCheatTools } from "./cheat-tools.mjs";
@@ -23,6 +26,8 @@ const enableCheats = !workforceOnly && process.argv.includes("--enable-cheats");
 const pipe = createPipeClient({ steam: steamMode, maxResponseSize: 1024 * 1024 });
 const request = (method, args) => pipe.call(method, args);
 const bridgeErrors = new Set(["bridge_offline", "bridge_busy", "pipe_timeout", "bridge_closed", "bridge_protocol"]);
+const toolCatalog = new Map();
+const readAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
 const server = new McpServer({ name: "infection-free-zone", version: "0.2.2" });
 process.stderr.write(`[ifz-mcp] language=${language} (${LANGUAGE_LABELS[language] ?? language}); supported=${SUPPORTED_LANGUAGES.join(",")}\n`);
 
@@ -31,9 +36,10 @@ const session = z.string().uuid().describe("Current session_id from get_state");
 const orderId = z.string().uuid();
 const control = { lease, session_id: session };
 
-function tool(name, description, inputSchema) {
+function tool(name, description, inputSchema, annotations) {
   const localized = localizeDescription(name, description, language);
-  server.registerTool(name, { description: localized, inputSchema }, async (args) => {
+  toolCatalog.set(name, { name, description: localized, execution: "bridge", parameters: Object.keys(inputSchema) });
+  server.registerTool(name, { description: localized, inputSchema, ...(annotations && { annotations }) }, async (args) => {
     let result;
     try {
       result = await request(name, args);
@@ -63,14 +69,15 @@ function writeTool(name, description, inputSchema) {
 }
 
 // 本地工具：不经桥接，直接读本地文件（天气来自存档 data.json）。
-function localTool(name, description, inputSchema, handler) {
+function localTool(name, description, inputSchema, handler, annotations) {
   const localized = localizeDescription(name, description, language);
-  server.registerTool(name, { description: localized, inputSchema }, async (args) => {
+  toolCatalog.set(name, { name, description: localized, execution: "composite_or_local", parameters: Object.keys(inputSchema) });
+  server.registerTool(name, { description: localized, inputSchema, ...(annotations && { annotations }) }, async (args) => {
     let result;
     try {
       result = await handler(args);
     } catch (error) {
-      result = { ok: false, code: bridgeErrors.has(error.code) ? error.code : "tool_error", message: error.message };
+      result = { ok: false, code: typeof error.code === "string" ? error.code : "tool_error", message: error.message };
     }
     return {
       isError: !result.ok,
@@ -100,6 +107,41 @@ tool("get_world_data", "Read a page from live game objects across the map. Nonpl
   category: z.enum(["squads", "citizens", "workers", "groups", "virtual_groups",
     "worksites", "vehicles", "stockrooms", "ground_resources", "stockpile", "resource_types", "map", "weapons", "events"]),
 });
+
+// Settlement intelligence requires the plugin build containing SettlementIntel.cs.
+tool("get_research_status", "Read live technology and legacy law research progress, current scientists and scientific materials. Native research work units are not game hours.", { session_id: session }, readAnnotations);
+tool("get_research_catalog", "Page live technology or legacy law research definitions with state, costs, prerequisites and progress. This does not select or start research.", {
+  ...worldPage, group: z.enum(["technology", "law"]).optional(),
+  state: z.enum(["locked", "unlocked", "being_researched", "completed", "unavailable"]).optional(),
+}, readAnnotations);
+tool("get_laws", "Read modern settlement laws, selected options, unlocked law groups, assembly state and native food/work-hour modifiers. Does not enact laws.", { session_id: session }, readAnnotations);
+tool("get_housing", "Read native housing capacity, occupied beds, homeless counts and a page of housing structures.", worldPage, readAnnotations);
+tool("get_storage_capacity", "Read shared physical/virtual storage capacity, occupied/reserved space and each warehouse's capacity contribution. Warehouses share inventory; individual stock quantities are not inferred.", worldPage, readAnnotations);
+tool("get_population_health", "Read living citizens and squad members' sickness, treatment, hunger and fatigue with deduplicated population totals and paginated individual details.", worldPage, readAnnotations);
+tool("get_food_status", "Read edible ration/can stocks, raw ingredients, food consumption settings and spoilage buckets; any daily consumption estimate includes its assumptions.", { session_id: session }, readAnnotations);
+tool("get_resource_definitions", "Page the native resource definitions: translated names, types, crate quantities, trade values and dismantling yields. This catalog does not change inventory.", {
+  ...worldPage, resource_id: z.string().min(1).max(64).optional(),
+}, readAnnotations);
+tool("get_resource_flows", "Page native production, scavenging and resource removal-request counters for the current and previous game day. Used includes failed removal requests; tracked net is not actual consumption or inventory delta.", {
+  ...worldPage, resource_id: z.string().min(1).max(64).optional(),
+}, readAnnotations);
+
+// NPC zones and convoy destinations share location types, but use different coordinate spaces.
+const npcPage = { ...worldPage, include_hidden: z.boolean().optional().describe("Include undiscovered entities without revealing them in the game (default false)") };
+tool("get_npc_zone", "Read the current map's NPC zone type, discovery/takeover state and population/building summary. Does not reveal, claim or provoke the settlement.", {
+  session_id: session, include_hidden: npcPage.include_hidden,
+}, readAnnotations);
+tool("get_npc_zone_groups", "Page only groups tagged NpcZoneGroup, with true affiliation to the player, immigration/dialogue state and native attackability. Ordinary passing immigrants are excluded. Hidden groups are excluded by default.", npcPage, readAnnotations);
+tool("get_npc_zone_structures", "Page the buildings and structures belonging to the current NPC zone, including ownership, condition and position. Uses zone discovery, not current per-building line of sight; undiscovered zone details require include_hidden. Does not adapt or take over buildings.", npcPage, readAnnotations);
+tool("get_group_relations", "Read actual player affiliation for physical groups: Own, Hostile, Neutral or Indifferent. Visibility and attackability are separate fields; false hostile_to_player alone does not establish neutrality.", {
+  ...npcPage, group_id: z.string().min(1).max(64).optional(),
+}, readAnnotations);
+tool("get_convoy_locations", "Page already-cached convoy destination types and known names with geographic tile coordinates and visited status. These coordinates are not settlement X/Z. Does not generate destinations or load a new map.", {
+  ...worldPage,
+  location_type: z.enum(["NormalPlace", "NeutralZone", "FarmersZone", "RaidersCamp", "NuclearZone", "QuietPlace", "AbandonedZone", "MilitaryZone", "PurifiersZone"]).optional(),
+  include_unrevealed: z.boolean().optional().describe("Include unnamed/unregistered destinations already in the cache (default false); does not discover them in-game"),
+}, readAnnotations);
+tool("get_convoy_status", "Page saved visited regions with current convoy context and live player squad/vehicle/cargo totals. The native IsConvoyStart flag means a special starting scenario, not departure in progress. Historical departure manifests remain unknown; no convoy is loaded or moved.", worldPage, readAnnotations);
 tool("get_workforce", "Read the current worker management mode, available civilian workers and one page of active staffing tasks, including buildings and gathering areas. Each task includes the actual assignment count, capacity, vacancies, work status and priority. Use next_offset to page.", worldPage);
 const entityId = z.string().min(1).max(64);
 tool("get_squad_experience", "Read each living squad member's shooting, melee, scavenging and driving experience, activated skills, current weapon and effective range. Omit squad_id to list all player squads.", {
@@ -291,6 +333,12 @@ tool("get_building_info", "Read one building: type, state, scavenge flags, resou
   session_id: session,
   building_id: entityId,
 });
+tool("get_building_details", "Read everything one building exposes in a single call: identity, state, position/bounds, POI icons, storage contents, scavenge progress, production batch progress, defense weapon/guards, healthcare data, related staffing tasks, and an optional reflection dump that surfaces hidden numeric fields such as remaining deposit/resource amounts.", {
+  session_id: session,
+  building_id: entityId,
+  include_reflection: z.boolean().optional().describe("Dump public scalar properties and the structure's own fields to reveal hidden numbers like remaining deposit amount (default true)"),
+});
+tool("get_production_progress", "Summarize every production facility: current recipe, batch progress 0-1, estimated remaining game hours, staffing, per-cycle inputs/outputs, and whether missing stockpile inputs are blocking the batch.", { session_id: session });
 tool("get_scavenge_progress", "List every in-progress scavenge: progress 0-1, time left, remaining loot crates and characters inside.", {
   session_id: session,
   limit: z.number().int().min(1).max(200).optional(),
@@ -365,5 +413,18 @@ registerExtraTools({ registerLocal: localTool, request, readOnly });
 registerMoreTools({ registerLocal: localTool, request, readOnly });
 registerEnemyTools({ registerLocal: localTool, request, readOnly });
 registerTools4({ registerLocal: localTool, request, readOnly });
+const registerRead = (name, description, schema, handler) => localTool(name, description, schema, handler, readAnnotations);
+registerLogisticsTools({ registerLocal: registerRead, request });
+registerOperationsTools({ registerLocal: registerRead, request });
+registerTacticalTools({ registerLocal: registerRead, request });
+registerRead("get_tool_catalog", "Search the tools enabled in this MCP process by name or description; returns parameter names and bridge/local routing. Available offline. This lists registrations, not installed plugin compatibility.", {
+  query: z.string().trim().max(100).optional(),
+  offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional(),
+}, async ({ query = "", offset = 0, limit = 30 }) => {
+  const needle = query.toLowerCase();
+  const items = [...toolCatalog.values()].filter(t => `${t.name} ${t.description}`.toLowerCase().includes(needle)).sort((a, b) => a.name.localeCompare(b.name));
+  return { ok: true, mode: strictReadOnly ? "read_only" : workforceOnly ? "workforce" : "default",
+    total: items.length, offset, next_offset: offset + limit < items.length ? offset + limit : null, items: items.slice(offset, offset + limit) };
+});
 
 await server.connect(new StdioServerTransport());

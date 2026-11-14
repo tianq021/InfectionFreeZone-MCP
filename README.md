@@ -13,9 +13,13 @@
 
 ---
 
-> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **92 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
+> 《Infection Free Zone》的人机协作 MCP 服务：BepInEx 插件在 Unity 主线程读写游戏，Node 侧用标准 MCP stdio 暴露 **132 个工具**，供 DSH / Codex 等 AI 客户端实时读取局势、下达订单，并与玩家 1 倍速同步协作。
 >
-> 适用 **Steam build 26104777**、Windows x64、Unity Mono。最后更新：2026-11-13。
+> 适用 **Steam build 26104777**、Windows x64、Unity Mono。最后更新：2026-11-14。
+>
+> 2026-11-14 新增 32 项只读能力：研究/法令、住房/健康/粮食、仓储/资源流水、物流/预算、生产/派工、医疗/防御和小队诊断。详见 [工具扩展分析与完整清单](docs/tool-expansion-2026-11-14.md)。Node 测试和插件编译通过；9 项新增原生查询尚待部署及实机验证。
+
+> 同日第二批新增 6 项 [NPC 聚落与大远征查询](docs/npc-convoy-tools.md)：聚落状态、人员、建筑、真实关系、目的地和车队状态，并修复中立人员报告。新增原生查询已编译，尚未部署及实机验证。
 
 ![架构总览](docs/img/architecture.png)
 
@@ -49,7 +53,7 @@
 | 游戏层 | 《无感染区》Steam build `26104777` | 存档位于 `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
 | 插件层 | `plugin/IfzMcp.csproj` → `IfzMcp.dll`（v0.2.2） | BepInEx 5 插件，Harmony 捕获游戏控制器 |
 | 桥接层 | Windows 命名管道 `\\.\pipe\infection-free-zone-mcp-steam-v1` | 同用户 ACL，单次调用 16–20 ms，整轮 7 类读取约 115 ms |
-| 服务层 | `server.mjs` | MCP stdio 服务，默认 92 个工具，DSH 平民协作配置 65 个，纯只读 59 个 |
+| 服务层 | `server.mjs` | MCP stdio 服务，默认 132 个工具，DSH 平民协作配置 105 个，纯只读 99 个 |
 | 客户端层 | DSH / Codex / `client.mjs` / 游戏内浮窗 / 只读监视器 | AI 通过 MCP 对话；玩家在游戏里用浮窗插话/打断 |
 
 **核心设计**
@@ -134,8 +138,8 @@ Copy-Item plugin\bin\Release\netstandard2.1\IfzMcp.dll $target -Force
 
 ```powershell
 node client.mjs --steam status          # version 必须为 0.2.2
-npm run tools:list                      # 默认 92 个工具
-npm run tools:list -- --steam --workforce-only --allow-construction  # DSH 配置 65 个
+npm run tools:list                      # 默认 132 个工具
+npm run tools:list -- --steam --workforce-only --allow-construction  # DSH 配置 105 个
 ```
 
 ### 3.4 v0.2.2 新增内容一览
@@ -200,6 +204,16 @@ InfectionFreeZone-MCP/
 
 ## 5. 工具总览
 
+### 2026-11-14 扩展
+
+两批合计新增 **38 个只读工具**，全部可用于标准、纯只读和平民协作配置。第一批 32 项的清单、示例和数据边界见 [扩展说明](docs/tool-expansion-2026-11-14.md)，第二批 6 项见 [NPC 聚落与大远征查询](docs/npc-convoy-tools.md)。`get_tool_catalog` 可离线搜索当前进程启用的工具和参数。
+
+本次源码更新同时补齐此前本地已有的 `get_building_details` 和 `get_production_progress`，因此相对 GitHub 上一版共新增 40 项工具，默认总数从 92 增至 132。
+
+新增模块：`tools-query.mjs` 统一会话/分页校验，`tools-logistics.mjs` 物流与预算，`tools-operations.mjs` 运营与派工，`tools-tactical.mjs` 小队诊断，`plugin/SettlementIntel.cs` 原生聚落情报。
+
+大远征到达新区域后，使用 `get_npc_zone`、`get_npc_zone_groups` 和 `get_npc_zone_structures` 查询当地聚落，`get_group_relations` 核对群组对玩家的实际关系。`get_convoy_locations` 读取已有目的地记录，`get_convoy_status` 读取当前车队地图与访问记录；地理瓦片坐标不能直接用于小队移动。
+
 ### 平民派工与建筑
 
 Codex 和 DSH 的示例配置使用 `--workforce-only --allow-construction`。AI 可以派工、建造和管理设施，玩家负责小队。`get_enemy_report` 和 `get_fog_of_war` 提供敌情与迷雾查询。
@@ -224,6 +238,8 @@ Codex 和 DSH 的示例配置使用 `--workforce-only --allow-construction`。AI
 | `get_navigation_point` | 单点投影：地面坐标、高度、area、偏移 |
 | `get_terrain_grid` | **地形栅格**：水/路/建筑/墙/桥候选/高程，一次调用（A* 图采样） |
 | `get_building_info` | **建筑详情**：类型、状态、资源图标、搜刮进度、剩余物资 |
+| `get_building_details` | **单栋建筑完整信息**：身份、状态、位置尺寸、库存、生产批次进度、防御配置、医疗信息、关联工单，并可选反射转储（暴露剩余储量等隐藏数值） |
+| `get_production_progress` | **全部生产设施进度**：当前配方、批次进度 0-1、剩余游戏小时、人手、每批投入产出、缺料停摆提示 |
 | `get_scavenge_progress` | **进行中的搜刮**：进度、剩余时间、剩余物资箱、内部人数 |
 | `find_buildings_by_poi` | **按图标找建筑**：`["Gun","Fuel","Drugs"...]` |
 | `get_expedition_tiles` | **远征地块**：类型/位置/资源图标/搜刮进度/已获资源 |
@@ -573,6 +589,8 @@ node client.mjs --steam cheat_add_resources '{"lease":"<lease>","session_id":"<s
 
 | 文档 | 内容 |
 |---|---|
+| [工具扩展分析与完整清单](docs/tool-expansion-2026-11-14.md) | 2026-11-14 新增 32 项工具、设计依据、使用示例、验证与下一批候选 |
+| [NPC 聚落与大远征查询](docs/npc-convoy-tools.md) | 第二批 6 项工具，区域类型、聚落人员/设施、真实关系、中立报告修复与验证边界 |
 | [架构分析-三大基础能力.md](架构分析-三大基础能力.md) | 实时状态/持续交流/异步执行系统设计；DSH 驱动/流式/中断；数据体量排名与查询策略 |
 | [地图数据量分析.md](地图数据量分析.md) | 地图类目实测：金华 6749 栋≈1.58 MB/68 页；Ruciane 378 栋≈164 KB |
 | [地图数据优化方案.md](地图数据优化方案.md) | P0 纯 Node → P1 插件过滤 → P2 推送订阅的渐进优化 |
@@ -597,6 +615,9 @@ node client.mjs --steam cheat_add_resources '{"lease":"<lease>","session_id":"<s
 ## 13. 变更登记
 
 每次更新必须写入 [renew/README.md](renew/README.md) 与 [renew/0.1.txt](renew/0.1.txt)。
+
+- **2026-11-14 第二批**：新增 6 项 NPC 聚落与大远征只读工具，默认 126→132；纯只读 99，平民协作 105。修复中立人员报告与真实关系识别；插件尚未部署及实机验证。
+- **2026-11-14 第一批**：新增 32 项只读工具，默认 94→126；纯只读 93，平民协作 99。保留版本号 0.2.2，新增原生查询需要更新插件构建。
 
 - **v0.2.2（2026-11-12）**：插件版本 0.2.2；工具 74 个（+地形栅格、建筑图标、远征、车辆、任务、11 个作弊、任务行动计划等）；新增文档配图与详细 README。
 - **v0.2.0（2026-11-11）**：作弊/地形批次；工具 32→43。

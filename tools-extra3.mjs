@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { compass, readAll, summarizeThreats, summarizeSquads } from "./tools-extra.mjs";
 import { listSaves, readZipEntry } from "./weather.mjs";
+import { createQuery, finite, queryError } from "./tools-query.mjs";
+import { groupRelation, isHostile, relationshipCoverage } from "./group-relations.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const moveCacheFile = path.join(here, ".local", "cache", "enemy-moves.json");
@@ -36,9 +38,7 @@ function planar(ax, az, bx, bz) {
   return Math.sqrt((ax - bx) ** 2 + (az - bz) ** 2);
 }
 
-function isHostile(group) {
-  return group.faction === "Infected" || group.faction === "Bandits";
-}
+const hasPosition = point => finite(point?.x) && finite(point?.z);
 
 function isLair(group) {
   return String(group.type ?? "").startsWith("hideout_");
@@ -195,19 +195,20 @@ function hostileRows(groups, { hq, squads, radius, includeHidden }) {
   for (const group of groups) {
     if (!isHostile(group)) continue;
     if (!includeHidden && !group.visible) continue;
+    if (!hasPosition(group.position)) continue;
     const distance = round(planar(group.position.x, group.position.z, hq.x, hq.z));
     if (radius && distance > radius) continue;
     const destDistance = round(planar(group.destination?.x ?? group.position.x, group.destination?.z ?? group.position.z, hq.x, hq.z));
     const moving =
       Math.abs((group.destination?.x ?? 0) - (group.position?.x ?? 0)) > 20 ||
       Math.abs((group.destination?.z ?? 0) - (group.position?.z ?? 0)) > 20;
-    const nearestSquad = squads
+    const nearestSquad = squads.filter(squad => hasPosition(squad.position))
       .map((squad) => ({ squadId: squad.id, distance: round(planar(group.position.x, group.position.z, squad.position.x, squad.position.z)) }))
       .sort((a, b) => a.distance - b.distance)[0] ?? null;
     const weapons = weaponMix(group);
     const variants = {};
     let maxTier = 0;
-    for (const member of group.members ?? []) {
+    for (const member of group.faction === "Infected" ? group.members ?? [] : []) {
       const variant = infectedVariantOf(member, group);
       variants[variant.label] = (variants[variant.label] ?? 0) + 1;
       if (variant.tier > maxTier) maxTier = variant.tier;
@@ -237,7 +238,10 @@ function hostileRows(groups, { hq, squads, radius, includeHidden }) {
       closing: destDistance < distance - 20,
       destinationDistanceToHq: destDistance,
       visible: Boolean(group.visible),
-      hostileToPlayer: Boolean(group.hostile_to_player),
+      hostileToPlayer: groupRelation(group).hostile,
+      affiliation_to_player: groupRelation(group).affiliation,
+      relation_source: groupRelation(group).source,
+      attack_condition_hostile_flag: typeof group.hostile_to_player === "boolean" ? group.hostile_to_player : null,
       nearestSquad,
     });
   }
@@ -357,7 +361,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
 
   registerLocal(
     "get_enemy_report",
-    "Enemy overview: every hostile group with type, member count, weapon mix, firepower score, distance/direction, whether it is moving toward the settlement, and the nearest squad.",
+    "Enemy overview using native affiliations or positive legacy hostile flags: type, member count, weapons, position and movement. Faction names alone do not establish hostility; unknown relationship coverage is reported.",
     {
       radius: z.number().min(100).max(5000).optional().describe("Max distance from HQ (default 2500)"),
       include_hidden: z.boolean().optional().describe("Include undiscovered groups (default true)"),
@@ -383,6 +387,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
         count: rows.length,
         totalMembers: rows.reduce((sum, row) => sum + row.members, 0),
         membersByFaction: byFaction,
+        relationship_coverage: relationshipCoverage(groups),
         closing: rows.filter((row) => row.closing).map((row) => row.groupId),
         groups: rows,
       };
@@ -406,6 +411,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
         time: state.time,
         hq,
         count: rows.length,
+        relationship_coverage: relationshipCoverage(groups),
         totalInfected: rows.filter((row) => row.faction === "Infected").reduce((sum, row) => sum + row.members, 0),
         lairs: rows.map((row) => ({ ...row, kind: lairKind(String(row.type)) })),
       };
@@ -452,6 +458,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
         time: state.time,
         baseline: previous.at === null,
         trackedGroups: rows.length,
+        relationship_coverage: relationshipCoverage(groups),
         moves,
         closingGroups: rows.filter((row) => row.closing).length,
       };
@@ -476,7 +483,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
       ]);
       const weaponTable = new Map(weapons.map((weapon) => [String(weapon.id), weapon]));
       const group = groups.find((entry) => String(entry.id) === args.group_id && entry.visible &&
-        (entry.hostile_to_player ?? isHostile(entry)));
+        isHostile(entry) && entry.hostile_to_player !== false);
       if (!group) return { ok: false, code: "invalid_attack_target", message: "请选择当前可见的敌群。" };
       const squadRows = squads.filter((squad) => !args.squad_ids || args.squad_ids.includes(String(squad.id)));
       if (!squadRows.length || args.squad_ids?.some((id) => !squadRows.some((squad) => String(squad.id) === id)))
@@ -682,7 +689,9 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
           faction: group.faction,
           species,
           infected,
-          hostile: infected,
+          hostile: groupRelation(group).hostile,
+          affiliation_to_player: groupRelation(group).affiliation,
+          relation_source: groupRelation(group).source,
           members: group.member_count,
           position: { x: round(group.position.x), z: round(group.position.z) },
           distanceToHq: distance,
@@ -706,56 +715,84 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
 
   registerLocal(
     "get_neutral_report",
-    "List non-hostile groups: neutral bandits (hostile_to_player=false), animals, immigrants and other neutral factions, with weapons, distance and whether they can be attacked at all.",
+    "List non-player groups with native Neutral/Indifferent affiliations, NPC-zone membership and communication state. Older bridges show visible unclassified groups separately marked as observations, never confirmed neutral. Unknown hidden relationships are excluded. Attackability is separate from affiliation.",
     {
       radius: z.number().min(100).max(6000).optional().describe("Max distance from HQ (default 3000)"),
       include_animals: z.boolean().optional().describe("Include animal groups (default true)"),
       include_hidden: z.boolean().optional().describe("Include undiscovered groups (default true)"),
+      limit: z.number().int().min(1).max(100).optional().describe("Maximum returned groups (default 30); counts cover all matches"),
     },
-    async (args) => {
-      const state = await sessionState(request);
-      const sessionId = state.session_id;
-      const [squads, groups] = await Promise.all([readAll(request, sessionId, "squads"), loadGroups(request, sessionId)]);
-      const hq = hqOf(state);
+    async (args = {}) => {
+      const q = await createQuery(request);
+      const state = q.state;
+      const [squads, groups] = await Promise.all([q.world("squads"), q.world("groups")]);
+      if (!hasPosition(state.headquarters)) throw queryError("headquarters_unavailable", "HQ coordinates are needed for the neutral-group radius filter.");
+      const hq = { x: state.headquarters.x, z: state.headquarters.z };
+      const ownIds = new Set(squads.map(squad => String(squad.id)));
       const includeAnimals = args.include_animals !== false;
       const includeHidden = args.include_hidden !== false;
+      const radius = args.radius ?? 3000;
+      const limit = args.limit ?? 30;
       const rows = [];
+      let unknownRelationshipCount = 0;
+      let unknownPositionCount = 0;
       for (const group of groups) {
-        if (isHostile(group)) continue;
+        const relation = groupRelation(group);
+        if (ownIds.has(String(group.id)) || group.faction === "Player" || relation.own) continue;
         if (!includeAnimals && group.faction === "Animals") continue;
-        if (!includeHidden && !group.visible) continue;
-        const distance = round(planar(group.position.x, group.position.z, hq.x, hq.z));
-        if (args.radius && distance > args.radius) continue;
+        if (!includeHidden && group.visible !== true) continue;
+        if (relation.hostile === true) continue;
+        if (!relation.nonHostileCandidate) { unknownRelationshipCount++; continue; }
+        if (!hasPosition(group.position)) { unknownPositionCount++; continue; }
+        const distance = planar(group.position.x, group.position.z, hq.x, hq.z);
+        if (distance > radius) continue;
         const weapons = weaponMix(group);
         rows.push({
           groupId: group.id,
           type: group.type,
           faction: group.faction,
           species: animalSpeciesOf(group),
-          hostileToPlayer: Boolean(group.hostile_to_player),
-          attackable: false,
-          members: group.member_count ?? (group.members ?? []).length,
+          hostileToPlayer: relation.hostile,
+          affiliation_to_player: relation.affiliation,
+          relation_source: relation.source,
+          confirmed_non_hostile: relation.hostile === false,
+          attack_condition_hostile_flag: typeof group.hostile_to_player === "boolean" ? group.hostile_to_player : null,
+          attackable: typeof group.can_be_attacked === "boolean" ? group.can_be_attacked : null,
+          npc_zone_member: typeof group.npc_zone_member === "boolean" ? group.npc_zone_member : null,
+          immigrants_state: group.immigrants_state ?? null,
+          members: finite(group.member_count) ? group.member_count : null,
+          sampled_members: Array.isArray(group.members) ? group.members.length : null,
           weaponMix: weapons.mix,
-      variants,
-      maxVariantTier: maxTier,
           position: { x: round(group.position.x), z: round(group.position.z) },
-          distanceToHq: distance,
+          distanceToHq: round(distance),
           direction: compass(group.position.x - hq.x, group.position.z - hq.z),
-          visible: Boolean(group.visible),
-          note: group.faction === "Animals" ? "野生动物，不可攻击；可驱赶/无视" : "非敌对，不可直接攻击（攻击接口要求 IsEnemy）",
+          visible: typeof group.visible === "boolean" ? group.visible : null,
+          note: relation.source === "legacy_visible_unclassified"
+            ? "The old bridge reports this visible group as not currently hostile/attackable by squads. Its diplomatic relationship is unknown."
+            : "Native affiliation is separate from attack eligibility; no permission to attack is implied.",
         });
       }
       rows.sort((a, b) => a.distanceToHq - b.distanceToHq);
       const byFaction = {};
-      for (const row of rows) byFaction[row.faction] = (byFaction[row.faction] ?? 0) + row.members;
+      for (const row of rows) if (row.members != null) byFaction[row.faction] = (byFaction[row.faction] ?? 0) + row.members;
       return {
         ok: true,
+        session_id: q.session_id,
         time: state.time,
         hq,
+        radius,
         count: rows.length,
-        totalMembers: rows.reduce((sum, row) => sum + row.members, 0),
+        totalMembers: rows.reduce((sum, row) => sum + (row.members ?? 0), 0),
+        unknownMemberCountGroups: rows.filter(row => row.members == null).length,
         membersByFaction: byFaction,
-        groups: rows,
+        confirmed_non_hostile_groups: rows.filter(row => row.confirmed_non_hostile).length,
+        legacy_visible_unclassified_groups: rows.filter(row => !row.confirmed_non_hostile).length,
+        excluded_unknown_relationship: unknownRelationshipCount,
+        excluded_unknown_position: unknownPositionCount,
+        truncated: rows.length > limit,
+        returned_count: Math.min(rows.length, limit),
+        groups: rows.slice(0, limit),
+        count_scope: "All radius/filter matches before output truncation; unknown relationships and positions are excluded.",
       };
     },
   );
@@ -811,6 +848,7 @@ export function registerEnemyTools({ registerLocal, request, readOnly = false })
         bounds,
         legend: ". 无敌人 1 <10 2 <30 3 <60 4 <100 5 ≥100 名成员 @ 总部",
         groups: rows.length,
+        relationship_coverage: relationshipCoverage(groups),
         totalMembers: rows.reduce((sum, row) => sum + row.members, 0),
         ascii,
       };

@@ -1,7 +1,7 @@
 # Infection Free Zone MCP · v0.2.2 (Русский)
 
 > MCP-мост для совместной игры человека и ИИ в **Infection Free Zone** (Steam build `26104777`, Windows x64, Unity Mono).
-> Плагин BepInEx читает и изменяет игру в главном потоке Unity, а сервер Node.js по умолчанию публикует **92 MCP-инструмента** через stdio: DSH / Codex и другие ИИ-клиенты видят поселение, отдают нативные приказы и играют в 1× синхронизации с игроком.
+> Плагин BepInEx читает и изменяет игру в главном потоке Unity, а сервер Node.js по умолчанию публикует **132 MCP-инструмента** через stdio: DSH / Codex и другие ИИ-клиенты видят поселение, отдают нативные приказы и играют в 1× синхронизации с игроком.
 
 **Языки:** [简体中文](../../README.md) · [English](README.en.md) · [日本語](README.ja.md) · **Русский**
 
@@ -19,7 +19,7 @@
 | Игра | Infection Free Zone (Steam `26104777`) | Сохранения: `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
 | Плагин | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 + Harmony, **45 методов моста** |
 | Мост | именованный канал `\\.\pipe\infection-free-zone-mcp-steam-v1` | 16–20 мс на вызов |
-| Сервер | `server.mjs` | 92 инструмента по умолчанию, 59 для чтения и 65 в конфигурации DSH для управления поселением |
+| Сервер | `server.mjs` | 132 инструмента по умолчанию, 99 для чтения и 105 в конфигурации DSH для управления поселением |
 | Клиенты | DSH / Codex / `client.mjs` / игровое окно чата / наблюдатели | ИИ играет вместе с человеком |
 
 **Принципы**
@@ -42,7 +42,7 @@ node client.mjs --steam get_mission_plan '{}'
 node client.mjs --steam get_enemy_report '{}'
 node client.mjs --steam find_buildings_by_poi '{"poi":["Gun","Fuel"]}'
 node client.mjs --steam get_vehicle_map '{}'
-npm run tools:list                         # 92 инструмента по умолчанию, игра не нужна
+npm run tools:list                         # 132 инструмента по умолчанию, игра не нужна
 ```
 
 `client.mjs` принимает JSON строкой или `@path/to/args.json` (рекомендуется в PowerShell 5.1).

@@ -1,7 +1,7 @@
 # Infection Free Zone MCP · v0.2.2 (English)
 
 > A human–AI co-op MCP bridge for **Infection Free Zone** (Steam build `26104777`, Windows x64, Unity Mono).
-> A BepInEx plugin reads/writes the game on the Unity main thread; a Node.js server exposes **92 MCP tools** by default over stdio so DSH / Codex and other AI clients can observe the settlement, issue native orders and play in 1× sync with the human player.
+> A BepInEx plugin reads/writes the game on the Unity main thread; a Node.js server exposes **132 MCP tools** by default over stdio so DSH / Codex and other AI clients can observe the settlement, issue native orders and play in 1× sync with the human player.
 
 **Languages:** [简体中文](../../README.md) · **English** · [日本語](README.ja.md) · [Русский](README.ru.md)
 
@@ -19,7 +19,7 @@
 | Game | Infection Free Zone (Steam `26104777`) | Saves in `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
 | Plugin | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 plugin, Harmony hooks, **45 bridge methods** |
 | Bridge | Named pipe `\\.\pipe\infection-free-zone-mcp-steam-v1` | ~16–20 ms per call |
-| Server | `server.mjs` | 92 tools by default, 59 in read-only mode and 65 in the DSH civilian configuration |
+| Server | `server.mjs` | 132 tools by default, 99 in read-only mode and 105 in the DSH civilian configuration |
 | Clients | DSH / Codex / `client.mjs` / in-game chat window / read-only watchers | AI plays alongside the human |
 
 **Design principles**
@@ -42,7 +42,7 @@ node client.mjs --steam get_mission_plan '{}'
 node client.mjs --steam get_enemy_report '{}'
 node client.mjs --steam find_buildings_by_poi '{"poi":["Gun","Fuel"]}'
 node client.mjs --steam get_vehicle_map '{}'
-npm run tools:list                         # 92 tools by default, no game required
+npm run tools:list                         # 132 tools by default, no game required
 ```
 
 `client.mjs` accepts inline JSON or `@path/to/args.json` (recommended under PowerShell 5.1).

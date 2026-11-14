@@ -2,6 +2,7 @@
 // 组合现有桥接调用，不需要插件改动。
 import { z } from "zod";
 import { readAll } from "./tools-extra.mjs";
+import { groupRelation, isHostile, relationshipCoverage } from "./group-relations.mjs";
 
 function round(value, digits = 1) {
   const factor = 10 ** digits;
@@ -166,11 +167,15 @@ export function registerTools4({ registerLocal, request, readOnly = false }) {
           .map((squad) => ({ squadId: squad.id, distance: Math.round(planar(squad.position?.x ?? 0, squad.position?.z ?? 0, point?.x ?? 0, point?.z ?? 0)) }))
           .sort((a, b) => a.distance - b.distance)[0] ?? null;
       const hostileGroups = (groups ?? [])
-        .filter((group) => group.faction === "Infected" || group.faction === "Bandits")
+        .filter(isHostile)
         .map((group) => ({
           groupId: group.id,
           type: group.type,
           faction: group.faction,
+          affiliation_to_player: groupRelation(group).affiliation,
+          relation_source: groupRelation(group).source,
+          visible: typeof group.visible === "boolean" ? group.visible : null,
+          attack_condition_hostile_flag: typeof group.hostile_to_player === "boolean" ? group.hostile_to_player : null,
           members: group.member_count,
           lair: String(group.type ?? "").startsWith("hideout_"),
           position: group.position,
@@ -193,13 +198,16 @@ export function registerTools4({ registerLocal, request, readOnly = false }) {
           if (objective.completed) continue;
           const type = objective.type;
           if (["KillCharacters", "DefeatInfected", "KillGroup", "ClearLair"].includes(type)) {
-            const targets = (type === "ClearLair" ? hostileGroups.filter((group) => group.lair) : hostileGroups).slice(0, 3);
+            const candidates = type === "ClearLair" ? hostileGroups.filter((group) => group.lair)
+              : type === "DefeatInfected" ? hostileGroups.filter((group) => group.faction === "Infected") : hostileGroups;
+            const targets = candidates.slice(0, 3);
             actions.push({
               objective: objective.id,
               type,
               action: "击杀敌对群",
               targets,
-              note: targets.length ? "用 attack_group 派最近的队伍进攻，攻击前先 get_combat_estimate 评估" : "当前没有可攻击的敌对群，先探索地图",
+              note: targets.length ? "候选为已知敌对群，未核实是否匹配该任务；先确认可见性、攻击条件及任务绑定，再用 get_combat_estimate 评估"
+                : "当前没有已确认的敌对候选；关系未知的群体未列入，请核实敌我和任务目标",
             });
           } else if (["ScavengeResource", "ScavengeResourceOnExpedition", "SendSquadToScavengeBuilding"].includes(type)) {
             const near = scavengeable
@@ -267,7 +275,8 @@ export function registerTools4({ registerLocal, request, readOnly = false }) {
           actions,
         });
       }
-      return { ok: true, time: state.time, sunsetInHours: sunsetIn, squadSummary: squadRows, planCount: plans.length, plans };
+      return { ok: true, time: state.time, sunsetInHours: sunsetIn, squadSummary: squadRows, planCount: plans.length, plans,
+        relationship_coverage: relationshipCoverage(groups) };
     },
   );
 }

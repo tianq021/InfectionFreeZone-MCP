@@ -1,7 +1,7 @@
 # Infection Free Zone MCP · v0.2.2（日本語）
 
 > 『Infection Free Zone』（Steam build `26104777`、Windows x64、Unity Mono）向けの人間×AI 協調 MCP ブリッジです。
-> BepInEx プラグインが Unity メインスレッドでゲームを読み書きし、Node.js サーバーが標準で **92 個の MCP ツール**を stdio で公開します。DSH / Codex などの AI クライアントは、拠点の状況を読み、ネイティブ命令を出し、プレイヤーと 1 倍速で協調プレイできます。
+> BepInEx プラグインが Unity メインスレッドでゲームを読み書きし、Node.js サーバーが標準で **132 個の MCP ツール**を stdio で公開します。DSH / Codex などの AI クライアントは、拠点の状況を読み、ネイティブ命令を出し、プレイヤーと 1 倍速で協調プレイできます。
 
 **言語：** [简体中文](../../README.md) · [English](README.en.md) · **日本語** · [Русский](README.ru.md)
 
@@ -19,7 +19,7 @@
 | ゲーム | Infection Free Zone（Steam `26104777`） | セーブ: `%LOCALAPPDATA%Low\JutsuGames\Infection Free Zone\Saves` |
 | プラグイン | `plugin/` → `IfzMcp.dll` v0.2.2 | BepInEx 5 + Harmony、**45 個のブリッジメソッド** |
 | ブリッジ | 名前付きパイプ `\\.\pipe\infection-free-zone-mcp-steam-v1` | 1 回 16–20 ms |
-| サーバー | `server.mjs` | 標準 92 ツール、読み取り専用 59 ツール、DSH の住民管理設定 65 ツール |
+| サーバー | `server.mjs` | 標準 132 ツール、読み取り専用 99 ツール、DSH の住民管理設定 105 ツール |
 | クライアント | DSH / Codex / `client.mjs` / ゲーム内チャット窓 / 読み取り専用監視 | AI が人間と一緒にプレイ |
 
 **設計方針**
@@ -42,7 +42,7 @@ node client.mjs --steam get_mission_plan '{}'
 node client.mjs --steam get_enemy_report '{}'
 node client.mjs --steam find_buildings_by_poi '{"poi":["Gun","Fuel"]}'
 node client.mjs --steam get_vehicle_map '{}'
-npm run tools:list                         # 標準 92 ツール（ゲーム不要）
+npm run tools:list                         # 標準 132 ツール（ゲーム不要）
 ```
 
 `client.mjs` はインライン JSON か `@args.json`（PowerShell 5.1 では推奨）を受け付けます。

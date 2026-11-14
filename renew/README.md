@@ -42,7 +42,6 @@
 | 2026-11-12 | 0.2.2 | 添加许可证：PolyForm Noncommercial 1.0.0（允许下载/修改/非商业再分发，禁止商用）；新增 THIRD_PARTY_NOTICES；README/三语文档/package.json 同步；仓库不含游戏文件 | `LICENSE`、`THIRD_PARTY_NOTICES.md`、`README.md`、`docs/i18n/README.*.md`、`package.json`、`renew/README.md`、`renew/0.1.txt` |
 | 2026-11-12 | 0.2.2 | 多国翻译：i18n.mjs（74 工具描述支持 zh-CN/en/ja/ru，`--lang`/`IFZ_MCP_LANG`）+ 英/日/俄三语 README + 英文版架构图 + 中文 README 运行截图 | `i18n.mjs`、`server.mjs`、`docs/i18n/*.md`、`docs/i18n/images/*.png`、`README.md`、`renew/README.md`、`renew/0.1.txt` |
 | 2026-11-12 | 0.2.2 | 版本收口 0.2.2：插件 36 桥接方法 / MCP 74 工具；新增地形栅格、建筑资源图标、搜刮进度、远征地块、全图车辆、任务详情与行动计划、11 个作弊工具、文档配图；README 重写为详细版 | `plugin/*.cs`、`server.mjs`、`tools-extra*.mjs`、`README.md`、`docs/img/*.png`、`handover/README.md`、`经验-无感染区AI协作.md`、`renew/README.md`、`renew/0.1.txt` |
-
 | 2026-11-12 | 0.2.2 | 发布精选源码快照；补齐可运行的工具自检命令，更新只读模式测试与公开文档 | `package.json`、`scripts/check-tools.mjs`、`runtime/test/async-runtime.test.mjs`、`README.md`、`docs/i18n/*.md`、`handover/README.md`、`runtime/README.md`、`config/`、`renew/` |
 | 2026-11-12 | 0.2.2 | 修复长局历史限制和未知订单占用，加入本地写入认证、地图距离排序、岗位差分和分类等待 | `runtime/`、`plugin/Plugin.cs`、`plugin/UnitControl.cs`、`plugin/BuildingInfo.cs`、`plugin/Expedition.cs`、`config/codex.toml`、`README.md` |
 | 2026-11-12 | 0.2.2 | 两个聊天浮窗只显示最近 50 条消息，完整记录写入本地 UTF-8 日志 | `scripts/ChatTranscript.ps1`、`scripts/Start-RuntimeChat.ps1`、`handover/`、`runtime/README.md` |
@@ -50,8 +49,10 @@
 | 2026-11-12 | 0.2.2 | 增加只读小队经验与武器详情工具，输出队员技能修正后的射程和武器基础战斗数值 | `plugin/SquadWeaponData.cs`、`plugin/Plugin.cs`、`server.mjs`、`i18n.mjs`、`runtime/test/async-runtime.test.mjs`、`README.md`、`docs/i18n/` |
 | 2026-11-12 | 0.2.2 | 修复敌群消失后的攻击回执、部分搜刮回执和待确认任务的计数，加入 MCP 释放入口与无线电暂停保护 | `runtime/`、`coop.mjs`、`plugin/RadioDialogue.cs`、`plugin/Plugin.cs` |
 | 2026-11-12 | 0.2.2 | 允许按原生订单 ID 强制终止协作行动并提示原因；新增开火条件查询，战力评估读取实时射程、视线、冷却和补给 | `plugin/`、`server.mjs`、`i18n.mjs`、`tools-extra3.mjs`、`runtime/`、`scripts/Start-RuntimeChat.ps1`、`README.md`、`docs/i18n/` |
-
 | 2026-11-13 | 0.2.2 | 新增平民派工、施工、设施配置、实时天气和情绪，校正地图方位。标准 MCP 92 个工具，DSH 平民协作 65 个，纯只读 59 个 | `plugin/`、`server.mjs`、`tools-extra.mjs`、`config/`、`README.md` |
+| 2026-11-14 | 0.2.2 | 新增32个只读工具：9项原生聚落情报与23项复合/发现查询；统一会话分页校验、中文描述与行为测试。默认126/纯只读93/平民协作99。插件编译通过，未部署，游戏离线尚待实机验证 | `plugin/SettlementIntel.cs`、`plugin/Plugin.cs`、`tools-query.mjs`、`tools-logistics.mjs`、`tools-operations.mjs`、`tools-tactical.mjs`、`server.mjs`、`i18n.mjs`、`runtime/test/*tools*.test.mjs`、`runtime/test/tools-query.test.mjs`、`runtime/test/expanded-tool-registration.test.mjs`、`docs/tool-expansion-2026-11-14.md`、`README.md`、`docs/i18n/README.*.md`、`renew/0.1.txt` |
+| 2026-11-14 | 0.2.2 | 第二批新增6项原生只读查询：NPC聚落状态/人员/结构、真实群组关系、大远征目的地与车队状态。修复中立报告及旧态势/任务规划的阵营误判。默认132/纯只读99/平民协作105。插件编译通过，未部署及实机验证 | `plugin/NpcZones.cs`、`plugin/ConvoyIntel.cs`、`plugin/WorldData.cs`、`plugin/Plugin.cs`、`group-relations.mjs`、`tools-extra.mjs`、`tools-extra3.mjs`、`tools-extra4.mjs`、`server.mjs`、`i18n.mjs`、`runtime/test/neutral-report.test.mjs`、`runtime/test/expanded-tool-registration.test.mjs`、`runtime/test/group-relations.test.mjs`、`docs/npc-convoy-tools.md`、`docs/tool-expansion-2026-11-14.md`、`README.md`、`docs/i18n/README.*.md`、`renew/0.1.txt` |
+| 2026-11-14 | 0.2.2 | GitHub 源码同步补齐建筑详情/生产进度两项查询；连同两批38项扩展，相对远程上一版92项增至132项。保留既有公开配置与发布历史 | `plugin/BuildingDetails.cs`、`plugin/Plugin.cs`、`server.mjs`、`README.md`、`docs/i18n/README.*.md`、`renew/0.1.txt` |
 
 ## 待办
 
